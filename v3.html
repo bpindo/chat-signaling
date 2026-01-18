@@ -75,6 +75,14 @@ pre{
   <button onclick="sendToHive()">Kirim ke Blockchain</button>
 </div>
 
+<!-- 🔽 BAGIAN BARU -->
+<div class="peer-section">
+  <b>Isi Komentar Hive (Live)</b>
+  <textarea id="hiveContent" rows="8" readonly
+    placeholder="Klik ambil data terbaru..."></textarea>
+  <button onclick="loadHiveComment()">Ambil Data Terbaru</button>
+</div>
+
 <script>
 /* ======================
    HIVE CONFIG (STATIS)
@@ -181,6 +189,18 @@ function sendToHive(){
     body,
     JSON.stringify({app:"mesh-signaling",tags:["comment"]}),
     e=>e?alert(e.message):alert("Komentar Hive diperbarui")
+  );
+}
+
+/* ========= LOAD COMMENT ========= */
+function loadHiveComment(){
+  hive.api.getContent(
+    HIVE.user,
+    HIVE.commentPermlink,
+    (e,r)=>{
+      if(e||!r.body)return alert("Gagal ambil komentar");
+      hiveContent.value=r.body;
+    }
   );
 }
 </script>
