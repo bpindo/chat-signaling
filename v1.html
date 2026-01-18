@@ -1,0 +1,233 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Multi-Peer Mesh Manual Signaling</title>
+
+<style>
+:root{
+  --bg:#f4f7fb;
+  --card:#ffffff;
+  --border:#d0d7e2;
+  --primary:#2563eb;
+  --text:#1f2937;
+  --muted:#6b7280;
+}
+
+body{
+  font-family: system-ui, monospace;
+  background:var(--bg);
+  color:var(--text);
+  padding:16px;
+  max-width:720px;
+  margin:auto;
+}
+
+h2{
+  margin-bottom:10px;
+}
+
+textarea, input{
+  width:100%;
+  background:#fff;
+  color:var(--text);
+  border:1px solid var(--border);
+  border-radius:6px;
+  margin:8px 0;
+  padding:10px;
+  box-sizing:border-box;
+  font-family:monospace;
+}
+
+textarea::placeholder,
+input::placeholder{
+  color:var(--muted);
+}
+
+button{
+  width:100%;
+  background:var(--primary);
+  color:#fff;
+  border:none;
+  border-radius:6px;
+  padding:10px;
+  cursor:pointer;
+  font-weight:600;
+}
+
+button:hover{
+  opacity:.9;
+}
+
+.peer-section{
+  background:var(--card);
+  border:1px solid var(--border);
+  border-radius:8px;
+  padding:12px;
+  margin-bottom:12px;
+}
+
+pre{
+  background:#f9fafb;
+  border:1px solid var(--border);
+  border-radius:8px;
+  padding:12px;
+  height:180px;
+  overflow:auto;
+  white-space:pre-wrap;
+  font-size:13px;
+}
+
+strong{
+  color:var(--primary);
+}
+.hide-id{
+  display:none;
+}
+
+</style>
+</head>
+
+<body>
+
+<h2>🌐 Multi-Peer Mesh Manual Signaling</h2>
+<div class="hide-id">
+  <strong>ID:</strong> <span id="myId"></span>
+</div>
+
+
+<div class="peer-section">
+  <strong>1️⃣ Buat Offer Baru</strong><br>
+  <button onclick="createOffer()">Buat Offer</button>
+</div>
+
+<div class="peer-section">
+  <strong>2️⃣ Signaling</strong><br>
+  <textarea id="signalInput" rows="3" placeholder="Paste signaling di sini"></textarea>
+  <button onclick="applySignal()">Apply Signaling</button>
+</div>
+
+<div class="peer-section">
+  <strong>3️⃣ Kirim Pesan</strong><br>
+  <input id="messageInput" placeholder="Pesan">
+  <button onclick="broadcast()">Kirim</button>
+</div>
+
+<div>
+  <strong>📡 Log</strong>
+  <pre id="log"></pre>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/simple-peer@9/simplepeer.min.js"></script>
+<script>
+const myId = 'anom' + Math.floor(1000 + Math.random()*9000);
+document.getElementById('myId').textContent = myId;
+
+const peers = {}; // connId -> peer
+const logEl = document.getElementById('log');
+
+function log(msg){
+  logEl.textContent += msg + "\n";
+  logEl.scrollTop = logEl.scrollHeight;
+}
+
+/* ======================
+   CREATE OFFER
+====================== */
+function createOffer(){
+  const connId = 'conn-' + crypto.randomUUID();
+
+  const peer = new SimplePeer({ initiator:true, trickle:false });
+  setupPeer(peer, connId);
+
+  peers[connId] = peer;
+  log(`⏳ Offer dibuat (${connId})`);
+}
+
+/* ======================
+   SETUP PEER
+====================== */
+function setupPeer(peer, connId){
+  peer.on('signal', data=>{
+    const payload = {
+      from: myId,
+      connId,
+      type: data.type,
+      signal: data
+    };
+    log(`### ${data.type.toUpperCase()} (${connId})\n` +
+        JSON.stringify(payload,null,2));
+  });
+
+  peer.on('connect', ()=>{
+    log(`✅ Connected (${connId})`);
+  });
+
+  peer.on('data', d=>{
+    const m = JSON.parse(d);
+    log(`👤 ${m.from}: ${m.text}`);
+  });
+
+  peer.on('close', ()=>{
+    log(`⚠️ Closed (${connId})`);
+    delete peers[connId];
+  });
+
+  peer.on('error', e=>{
+    log(`❌ ${connId}: ${e.message}`);
+  });
+}
+
+/* ======================
+   APPLY SIGNAL
+====================== */
+function applySignal(){
+  let obj;
+  try { obj = JSON.parse(signalInput.value.trim()); }
+  catch { return alert('JSON tidak valid'); }
+
+  const { connId, signal, type } = obj;
+  if (!connId || !signal || !type)
+    return alert('Format signaling salah');
+
+  /* RECEIVER */
+  if (!peers[connId]) {
+    if (type !== 'offer')
+      return alert('Receiver hanya menerima OFFER');
+
+    const peer = new SimplePeer({ initiator:false, trickle:false });
+    setupPeer(peer, connId);
+    peers[connId] = peer;
+
+    peer.signal(signal);
+    log(`⏳ OFFER diterima (${connId})`);
+  }
+  /* INITIATOR */
+  else {
+    peers[connId].signal(signal);
+    log(`✅ ${type.toUpperCase()} diterapkan (${connId})`);
+  }
+
+  signalInput.value='';
+}
+
+/* ======================
+   BROADCAST
+====================== */
+function broadcast(){
+  const msg = messageInput.value.trim();
+  if (!msg) return;
+
+  for (const id in peers){
+    if (peers[id].connected){
+      peers[id].send(JSON.stringify({ from: myId, text: msg }));
+    }
+  }
+  log(`🗨️ Kamu: ${msg}`);
+  messageInput.value='';
+}
+</script>
+
+</body>
+</html>
