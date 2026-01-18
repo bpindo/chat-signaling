@@ -1,0 +1,226 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Mesh Signaling Hive – Stable</title>
+
+<script src="https://cdn.jsdelivr.net/npm/simple-peer@9/simplepeer.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@hiveio/hive-js/dist/hive.min.js"></script>
+
+<style>
+body{font-family:system-ui;background:#f4f7fb;padding:12px}
+button,input{padding:8px;margin:4px}
+pre{background:#111;color:#0f0;padding:10px;height:240px;overflow:auto}
+</style>
+</head>
+<body>
+
+<h3>Mesh Signaling Hive (Stable)</h3>
+
+<button onclick="createOffer()">Buat Offer</button>
+<input id="msg" placeholder="pesan"/>
+<button onclick="broadcast()">Kirim</button>
+
+<pre id="log"></pre>
+
+<script>
+/* ================= HIVE ================= */
+const HIVE = {
+  user:"kingtherion",
+  key:"5KJpZcMVmn3eskXvfmYQypNj7L7ZJ4gQfGf8Vmi2mmEtB4bFxNr",
+  parentAuthor:"kingtherion",
+  parentPermlink:"senja-berganti-malam",
+  commentPermlink:"comment-1740462707630"
+};
+
+hive.api.setOptions({ url:"https://api.hive.blog" });
+hive.api.getConfig((e,r)=>!e&&hive.config.set("chain_id",r.HIVE_CHAIN_ID));
+
+hive.api.getContentAsync=(a,p)=>new Promise((res,rej)=>{
+  hive.api.getContent(a,p,(e,r)=>e?rej(e):res(r))
+});
+
+/* ================= STATE ================= */
+const myId = "node-"+Math.random().toString(36).slice(2,7);
+const peers = {};
+const processedSignals = new Set();
+
+const directPeers = new Set();
+const knownPeers = new Set([myId]);
+const seenEvents = new Set();
+
+let pollTimer = null;
+
+/* ================= LOG ================= */
+const logEl=document.getElementById("log");
+const log=t=>{logEl.textContent+=t+"\n";logEl.scrollTop=99999};
+
+/* ================= HELPERS ================= */
+function signalId(s){
+  return s.from+"_"+s.connId+"_"+s.type;
+}
+
+/* ================= MESH EVENT ================= */
+function sendMeshEvent(evt,peer){
+  const ev={
+    type:"mesh-event",
+    evt,
+    id:`evt-${myId}-${Date.now()}`,
+    from:myId,
+    peer,
+    hops:0,
+    ttl:3
+  };
+  seenEvents.add(ev.id);
+  broadcastRaw(ev);
+}
+
+function handleMeshEvent(ev){
+  if(seenEvents.has(ev.id)) return;
+  if(ev.hops>=ev.ttl) return;
+
+  seenEvents.add(ev.id);
+  knownPeers.add(ev.from);
+  if(ev.peer) knownPeers.add(ev.peer);
+
+  ev.hops++;
+  broadcastRaw(ev);
+}
+
+/* ================= ADAPTIVE POLLING ================= */
+function computeHiveInterval(){
+  const n = directPeers.size;
+  if(n<=1) return 5000;
+  if(n===2) return 30000;
+  if(n===3) return 60000;
+  return 120000;
+}
+
+function restartPolling(){
+  if(pollTimer) clearTimeout(pollTimer);
+  const interval = computeHiveInterval();
+  log(`⏱️ Poll Hive tiap ${interval/1000}s`);
+  pollTimer=setTimeout(async ()=>{
+    await checkHive();
+    restartPolling();
+  },interval);
+}
+
+/* ================= PEER ================= */
+function setupPeer(p,id){
+  p.on("signal",sig=>{
+    sendSignal({
+      from:myId,
+      connId:id,
+      type:sig.type,
+      signal:sig
+    });
+  });
+
+  p.on("connect",()=>{
+    directPeers.add(id);
+    log(`✅ CONNECT ${id}`);
+    sendMeshEvent("mesh:connect",id);
+    restartPolling();
+  });
+
+  p.on("close",()=>{
+    directPeers.delete(id);
+    delete peers[id];
+    log(`❌ CLOSE ${id}`);
+    restartPolling();
+  });
+
+  p.on("data",d=>{
+    const msg=JSON.parse(d);
+    if(msg.type==="mesh-event") handleMeshEvent(msg);
+    else log(`💬 ${msg.from}: ${msg.text}`);
+  });
+
+  p.on("error",e=>{
+    log(`❌ Peer error: ${e.message}`);
+  });
+}
+
+/* ================= CREATE OFFER ================= */
+function createOffer(){
+  const id="conn-"+crypto.randomUUID();
+  const p=new SimplePeer({initiator:true,trickle:false});
+  peers[id]=p;
+  setupPeer(p,id);
+  log(`⏳ Offer dibuat ${id}`);
+}
+
+/* ================= SIGNALING HIVE ================= */
+async function sendSignal(sig){
+  const c=await hive.api.getContentAsync(HIVE.user,HIVE.commentPermlink);
+  let arr=[];
+  try{arr=JSON.parse(c.body)||[]}catch{}
+
+  arr.push(sig);
+
+  hive.broadcast.comment(
+    HIVE.key,
+    HIVE.parentAuthor,
+    HIVE.parentPermlink,
+    HIVE.user,
+    HIVE.commentPermlink,
+    "",
+    JSON.stringify(arr),
+    "{}",
+    ()=>log(`📡 ${sig.type.toUpperCase()} → Hive`)
+  );
+}
+
+async function checkHive(){
+  log("🔍 cek Hive");
+  const c=await hive.api.getContentAsync(HIVE.user,HIVE.commentPermlink);
+
+  let arr=[];
+  try{arr=JSON.parse(c.body)||[]}catch{}
+
+  arr.forEach(sig=>{
+    if(sig.from===myId) return;
+
+    const id=signalId(sig);
+    if(processedSignals.has(id)) return;
+    processedSignals.add(id);
+
+    if(!peers[sig.connId] && sig.type==="offer"){
+      const p=new SimplePeer({initiator:false,trickle:false});
+      peers[sig.connId]=p;
+      setupPeer(p,sig.connId);
+      p.signal(sig.signal);
+      log(`📥 APPLY OFFER ${sig.connId}`);
+    }
+    else if(peers[sig.connId]){
+      peers[sig.connId].signal(sig.signal);
+      log(`📥 APPLY ${sig.type} ${sig.connId}`);
+    }
+  });
+}
+
+/* ================= CHAT ================= */
+function broadcast(){
+  const t=document.getElementById("msg").value;
+  Object.values(peers).forEach(p=>{
+    if(p.connected)p.send(JSON.stringify({from:myId,text:t}));
+  });
+  log(`🗨️ kamu: ${t}`);
+}
+
+/* ================= RAW ================= */
+function broadcastRaw(obj){
+  Object.values(peers).forEach(p=>{
+    if(p.connected)p.send(JSON.stringify(obj));
+  });
+}
+
+/* ================= START ================= */
+log("🟢 node "+myId+" start");
+restartPolling();
+</script>
+
+</body>
+</html>
