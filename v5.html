@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Mesh Signaling Hive – Stable</title>
+<title>Mesh Signaling Hive – Stable with Peer Status</title>
 
 <script src="https://cdn.jsdelivr.net/npm/simple-peer@9/simplepeer.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@hiveio/hive-js/dist/hive.min.js"></script>
@@ -12,17 +12,31 @@
 body{font-family:system-ui;background:#f4f7fb;padding:12px}
 button,input{padding:8px;margin:4px}
 pre{background:#111;color:#0f0;padding:10px;height:240px;overflow:auto}
+#peersStatus {
+  background:#fff;
+  border:1px solid #ccc;
+  padding:10px;
+  border-radius:6px;
+  font-family: monospace;
+  margin-top: 12px;
+  max-height: 160px;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  color: #333;
+}
 </style>
 </head>
 <body>
 
-<h3>Mesh Signaling Hive (Stable)</h3>
+<h3>Mesh Signaling Hive (Stable) with Peer Status</h3>
 
 <button onclick="createOffer()">Buat Offer</button>
 <input id="msg" placeholder="pesan"/>
 <button onclick="broadcast()">Kirim</button>
 
 <pre id="log"></pre>
+
+<div id="peersStatus"><b>Peer status akan muncul di sini...</b></div>
 
 <script>
 /* ================= HIVE ================= */
@@ -61,6 +75,23 @@ function signalId(s){
   return s.from+"_"+s.connId+"_"+s.type;
 }
 
+/* ================= PEER STATUS UPDATE ================= */
+function updatePeersStatus() {
+  const container = document.getElementById("peersStatus");
+  let html = "";
+
+  html += `Known Peers (${knownPeers.size}):\n` + Array.from(knownPeers).join(", ") + "\n\n";
+  html += `Directly Connected Peers (${directPeers.size}):\n` + Array.from(directPeers).join(", ") + "\n\n";
+
+  html += "Connections:\n";
+  for (const [connId, peer] of Object.entries(peers)) {
+    const connected = peer.connected ? "Connected" : "Disconnected";
+    html += `- ${connId}: ${connected}\n`;
+  }
+
+  container.textContent = html;
+}
+
 /* ================= MESH EVENT ================= */
 function sendMeshEvent(evt,peer){
   const ev={
@@ -92,8 +123,8 @@ function handleMeshEvent(ev){
 function computeHiveInterval(){
   const n = directPeers.size;
   if(n<=1) return 5000;
-  if(n===2) return 30000;
-  if(n===3) return 60000;
+  if(n===2) return 10000;
+  if(n===3) return 30000;
   return 120000;
 }
 
@@ -122,6 +153,7 @@ function setupPeer(p,id){
     directPeers.add(id);
     log(`✅ CONNECT ${id}`);
     sendMeshEvent("mesh:connect",id);
+    updatePeersStatus();
     restartPolling();
   });
 
@@ -129,6 +161,7 @@ function setupPeer(p,id){
     directPeers.delete(id);
     delete peers[id];
     log(`❌ CLOSE ${id}`);
+    updatePeersStatus();
     restartPolling();
   });
 
@@ -150,6 +183,7 @@ function createOffer(){
   peers[id]=p;
   setupPeer(p,id);
   log(`⏳ Offer dibuat ${id}`);
+  updatePeersStatus();
 }
 
 /* ================= SIGNALING HIVE ================= */
@@ -193,17 +227,20 @@ async function checkHive(){
       setupPeer(p,sig.connId);
       p.signal(sig.signal);
       log(`📥 APPLY OFFER ${sig.connId}`);
+      updatePeersStatus();
     }
     else if(peers[sig.connId]){
       peers[sig.connId].signal(sig.signal);
       log(`📥 APPLY ${sig.type} ${sig.connId}`);
     }
   });
+  updatePeersStatus();
 }
 
 /* ================= CHAT ================= */
 function broadcast(){
-  const t=document.getElementById("msg").value;
+  const t=document.getElementById("msg").value.trim();
+  if(!t) return;
   Object.values(peers).forEach(p=>{
     if(p.connected)p.send(JSON.stringify({from:myId,text:t}));
   });
@@ -220,6 +257,7 @@ function broadcastRaw(obj){
 /* ================= START ================= */
 log("🟢 node "+myId+" start");
 restartPolling();
+
 </script>
 
 </body>
