@@ -1,64 +1,79 @@
 <!DOCTYPE html>
 <html lang="id">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Mesh Signaling → Hive</title>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Mesh Signaling Hive dengan Virtual JSON Lokal</title>
 
 <script src="https://cdn.jsdelivr.net/npm/simple-peer@9/simplepeer.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@hiveio/hive-js/dist/hive.min.js"></script>
 
 <style>
-:root{
-  --bg:#f4f7fb;--card:#fff;--border:#d0d7e2;
-  --primary:#2563eb;--text:#1f2937;
-}
-body{
-  font-family:system-ui,monospace;
-  background:var(--bg);color:var(--text);
-  padding:16px;max-width:760px;margin:auto
-}
-textarea,input,button{
-  width:100%;padding:10px;margin:8px 0;
-  border-radius:6px;border:1px solid var(--border);
-  font-family:monospace;box-sizing:border-box
-}
-button{background:var(--primary);color:#fff;border:none;font-weight:600;cursor:pointer}
-button:hover{opacity:.9}
-.peer-section{
-  background:var(--card);
-  border:1px solid var(--border);
-  border-radius:8px;
-  padding:12px;margin-bottom:12px
-}
-pre{
-  background:#f9fafb;border:1px solid var(--border);
-  border-radius:8px;padding:12px;height:160px;
-  overflow:auto;font-size:13px
-}
-#jsonLog{
-  background:#0f172a;color:#e5e7eb;
-  border-radius:8px;font-size:13px
-}
+  :root {
+    --bg:#f4f7fb; --card:#fff; --border:#d0d7e2;
+    --primary:#2563eb; --text:#1f2937;
+  }
+  body {
+    font-family: system-ui, monospace;
+    background: var(--bg);
+    color: var(--text);
+    padding: 16px;
+    max-width: 760px;
+    margin: auto;
+  }
+  textarea, input, button {
+    width: 100%;
+    padding: 10px;
+    margin: 8px 0;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    font-family: monospace;
+    box-sizing: border-box;
+  }
+  button {
+    background: var(--primary);
+    color: #fff;
+    border: none;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  button:hover {
+    opacity: .9;
+  }
+  .peer-section {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 12px;
+    margin-bottom: 12px;
+  }
+  pre {
+    background: #f9fafb;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 12px;
+    height: 160px;
+    overflow: auto;
+    font-size: 13px;
+  }
+  #jsonLog {
+    background: #0f172a;
+    color: #e5e7eb;
+    border-radius: 8px;
+    font-size: 13px;
+  }
 </style>
 </head>
-
 <body>
 
-<h2><center>Multi-Peer Mesh Manual Signaling</center></h2>
+<h2><center>Mesh Signaling Hive dengan Virtual JSON Lokal</center></h2>
 
 <div class="peer-section">
   <button onclick="createOffer()">Buat Offer</button>
 </div>
 
 <div class="peer-section">
-  <textarea id="signalInput" rows="3"
-    placeholder="Paste signaling JSON di sini"></textarea>
-  <button onclick="applySignal()">Apply Signaling</button>
-</div>
-
-<div class="peer-section">
-  <input id="messageInput" placeholder="Pesan">
+  <input id="messageInput" placeholder="Pesan" />
   <button onclick="broadcast()">Kirim Pesan</button>
 </div>
 
@@ -67,142 +82,346 @@ pre{
 </div>
 
 <div class="peer-section">
-  <strong>Signaling JSON</strong>
-  <textarea id="jsonLog" rows="8" readonly
-    placeholder="Offer / Answer akan muncul di sini"></textarea>
-
-  <!-- 🔥 TOMBOL BARU -->
-  <button onclick="sendToHive()">Kirim ke Blockchain</button>
+  <strong>Signaling JSON Terakhir</strong>
+  <textarea id="jsonLog" rows="8" readonly placeholder="Offer / Answer akan muncul di sini"></textarea>
 </div>
 
-<!-- 🔽 BAGIAN BARU -->
 <div class="peer-section">
   <b>Isi Komentar Hive (Live)</b>
-  <textarea id="hiveContent" rows="8" readonly
-    placeholder="Klik ambil data terbaru..."></textarea>
-  <button onclick="loadHiveComment()">Ambil Data Terbaru</button>
+  <textarea id="hiveContent" rows="8" readonly placeholder="Komentar Hive live akan muncul di sini..."></textarea>
+  <button onclick="loadHiveComment()">Ambil Data Terbaru Manual</button>
 </div>
 
 <script>
-/* ======================
-   HIVE CONFIG (STATIS)
-====================== */
-const HIVE={
-  user:"bagasadi",
-  key:"5K1NkJgJ2KrRcoJkBYFVE6v6icQgDh9dup8JkaTPPuQBfjY4oKS",
-  parentAuthor:"rewar.app",
-  parentPermlink:"are-you-ready",
-  commentPermlink:"comment-1768732863127"
+/* =========================
+   KONFIGURASI HIVE
+========================= */
+const HIVE = {
+  user: "bagasadi",
+  key: "5K1NkJgJ2KrRcoJkBYFVE6v6icQgDh9dup8JkaTPPuQBfjY4oKS",
+  parentAuthor: "rewar.app",
+  parentPermlink: "are-you-ready",
+  commentPermlink: "comment-1768732863127"
 };
 
-hive.api.setOptions({url:"https://api.hive.blog"});
-hive.api.getConfig((e,r)=>!e&&hive.config.set("chain_id",r.HIVE_CHAIN_ID));
+hive.api.setOptions({ url: "https://api.hive.blog" });
+hive.api.getConfig((e, r) => !e && hive.config.set("chain_id", r.HIVE_CHAIN_ID));
 
-/* ======================
+/* =========================
+   STATE & VARIABEL GLOBAL
+========================= */
+const myId = "anom" + Math.floor(1000 + Math.random() * 9000);
+const peers = {};
+const logEl = document.getElementById("log");
+const jsonLogEl = document.getElementById("jsonLog");
+const hiveContentEl = document.getElementById("hiveContent");
+const messageInput = document.getElementById("messageInput");
+
+// Virtual signaling lokal
+let virtualSignaling = [];      // signaling belum dipakai
+let processedSignals = new Set(); // tanda signaling sudah dipakai, id: from+connId+type
+
+// Tracking last Hive comment body untuk merge
+let lastHiveCommentBody = null;
+
+// Interval polling Hive (ms)
+const POLLING_INTERVAL = 5000;
+
+/* =========================
+   LOG & HELPER
+========================= */
+function logText(text) {
+  logEl.textContent += text + "\n";
+  logEl.scrollTop = logEl.scrollHeight;
+}
+
+function logJSON(obj) {
+  jsonLogEl.value = JSON.stringify(obj, null, 2);
+  jsonLogEl.scrollTop = 0;
+}
+
+function signalId(signal) {
+  return signal.from + "_" + signal.connId + "_" + signal.type;
+}
+
+/* =========================
    PEER SETUP
-====================== */
-const myId='anom'+Math.floor(1000+Math.random()*9000);
-const peers={},logEl=log,jsonLogEl=jsonLog;
-
-function logText(t){
-  logEl.textContent+=t+"\n";
-  logEl.scrollTop=logEl.scrollHeight;
-}
-function logJSON(o){
-  jsonLogEl.value=JSON.stringify(o,null,2);
-  jsonLogEl.scrollTop=0;
-}
-
-/* ======================
-   OFFER
-====================== */
-function createOffer(){
-  const id='conn-'+crypto.randomUUID();
-  const p=new SimplePeer({initiator:true,trickle:false});
-  peers[id]=p;setupPeer(p,id);
-  logText(`⏳ Offer dibuat (${id})`);
-}
-
-function setupPeer(p,id){
-  p.on('signal',d=>{
-    const o={from:myId,connId:id,type:d.type,signal:d};
-    logText(`📡 ${d.type.toUpperCase()} (${id})`);
-    logJSON(o);
-  });
-  p.on('connect',()=>logText(`✅ Connected (${id})`));
-  p.on('data',d=>{
-    const m=JSON.parse(d);
-    logText(`💬 ${m.from}: ${m.text}`);
-  });
-  p.on('close',()=>{logText(`⚠️ Closed (${id})`);delete peers[id]});
-  p.on('error',e=>logText(`❌ ${id}: ${e.message}`));
-}
-
-/* ======================
-   APPLY SIGNAL
-====================== */
-function applySignal(){
-  let o;
-  try{o=JSON.parse(signalInput.value)}catch{
-    return alert("JSON tidak valid");
-  }
-  const {connId,signal,type}=o;
-  if(!peers[connId]){
-    if(type!=="offer")return alert("Harus OFFER");
-    const p=new SimplePeer({initiator:false,trickle:false});
-    peers[connId]=p;setupPeer(p,connId);
-    p.signal(signal);
-  }else{
-    peers[connId].signal(signal);
-  }
-  logJSON(o);
-  signalInput.value="";
-}
-
-/* ======================
-   CHAT
-====================== */
-function broadcast(){
-  const m=messageInput.value.trim();
-  if(!m)return;
-  for(const id in peers){
-    peers[id].connected&&peers[id].send(JSON.stringify({from:myId,text:m}));
-  }
-  logText(`🗨️ Kamu: ${m}`);
-  messageInput.value="";
-}
-
-/* ======================
-   🔥 SEND JSON TO HIVE
-====================== */
-function sendToHive(){
-  const body=jsonLogEl.value.trim();
-  if(!body)return alert("Signaling JSON kosong");
-
-  hive.broadcast.comment(
-    HIVE.key,
-    HIVE.parentAuthor,
-    HIVE.parentPermlink,
-    HIVE.user,
-    HIVE.commentPermlink,   // ← EDIT KOMENTAR
-    "",
-    body,
-    JSON.stringify({app:"mesh-signaling",tags:["comment"]}),
-    e=>e?alert(e.message):alert("Komentar Hive diperbarui")
-  );
-}
-
-/* ========= LOAD COMMENT ========= */
-function loadHiveComment(){
-  hive.api.getContent(
-    HIVE.user,
-    HIVE.commentPermlink,
-    (e,r)=>{
-      if(e||!r.body)return alert("Gagal ambil komentar");
-      hiveContent.value=r.body;
+========================= */
+function setupPeer(p, id) {
+  p.on("signal", (data) => {
+    const signalingObj = { from: myId, connId: id, type: data.type, signal: data };
+    logText(`📡 SIGNAL ${data.type.toUpperCase()} (${id})`);
+    logJSON(signalingObj);
+    // Simpan signaling lokal (offer/answer) dan kirim ke Hive jika answer
+    if (data.type === "answer") {
+      sendSignalToHive(signalingObj);
+    } else if (data.type === "offer") {
+      // Offer di buat manual lewat tombol createOffer, jadi send manual juga
+      // Jangan kirim otomatis disini, supaya user bisa review dulu
     }
-  );
+  });
+
+  p.on("connect", () => logText(`✅ Connected (${id})`));
+  p.on("data", (data) => {
+    try {
+      const msg = JSON.parse(data);
+      logText(`💬 ${msg.from}: ${msg.text}`);
+    } catch {
+      logText(`💬 Data tidak bisa di parse (${id})`);
+    }
+  });
+  p.on("close", () => {
+    logText(`⚠️ Closed (${id})`);
+    delete peers[id];
+  });
+  p.on("error", (err) => {
+    logText(`❌ Error (${id}): ${err.message}`);
+  });
 }
+
+/* =========================
+   CREATE OFFER
+========================= */
+function createOffer() {
+  const connId = "conn-" + crypto.randomUUID();
+  const peer = new SimplePeer({ initiator: true, trickle: false });
+  peers[connId] = peer;
+  setupPeer(peer, connId);
+  logText(`⏳ Offer dibuat (${connId})`);
+
+  peer.on("signal", (data) => {
+    const signalingObj = { from: myId, connId: connId, type: data.type, signal: data };
+    logText(`📡 Offer signaling dibuat (${connId})`);
+    logJSON(signalingObj);
+    // Kirim offer ke Hive
+    sendSignalToHive(signalingObj);
+  });
+}
+
+/* =========================
+   APPLY SIGNALING
+========================= */
+function applySignal(signalObj) {
+  const { from, connId, type, signal } = signalObj;
+
+  if (from === myId) return; // Jangan proses signaling sendiri
+
+  if (!peers[connId]) {
+    if (type === "offer") {
+      const peer = new SimplePeer({ initiator: false, trickle: false });
+      peers[connId] = peer;
+      setupPeer(peer, connId);
+      peer.signal(signal);
+      logText(`📥 Apply OFFER dari ${from} (${connId})`);
+    } else {
+      logText(`⚠️ Answer tanpa offer diabaikan (${connId})`);
+      return;
+    }
+  } else {
+    peers[connId].signal(signal);
+    logText(`📥 Apply SIGNALING ${type.toUpperCase()} (${connId})`);
+  }
+}
+
+/* =========================
+   PROSES VIRTUAL SIGNALING (apply signaling belum dipakai)
+========================= */
+function processVirtualSignaling() {
+  let usedThisCycle = false;
+
+  virtualSignaling.forEach((sig) => {
+    const id = signalId(sig);
+    if (processedSignals.has(id)) return; // Sudah diproses
+    if (sig.from === myId) return; // Jangan proses signaling sendiri
+
+    if (sig.type === "offer") {
+      logText(`🔔 Found OFFER baru dari ${sig.from}, connId: ${sig.connId}`);
+      applySignal(sig);
+      processedSignals.add(id);
+      usedThisCycle = true;
+
+      // Setelah apply offer, buat answer otomatis
+      // Karena peer baru dibuat (initiator:false), buat answer:
+      const p = peers[sig.connId];
+      if (p) {
+        p.on("signal", (data) => {
+          if (data.type === "answer") {
+            const answerSignal = {
+              from: myId,
+              connId: sig.connId,
+              type: "answer",
+              signal: data,
+            };
+            logText(`📡 Kirim ANSWER untuk connId: ${sig.connId}`);
+            sendSignalToHive(answerSignal);
+          }
+        });
+      }
+    } else if (sig.type === "answer") {
+      logText(`🔔 Found ANSWER dari ${sig.from} untuk connId: ${sig.connId}`);
+      applySignal(sig);
+      processedSignals.add(id);
+      usedThisCycle = true;
+    }
+  });
+
+  // Buang signaling yang sudah diproses dari virtualSignaling
+  virtualSignaling = virtualSignaling.filter((sig) => !processedSignals.has(signalId(sig)));
+
+  return usedThisCycle;
+}
+
+/* =========================
+   SEND SIGNALING KE HIVE (MERGE + UPDATE)
+========================= */
+async function sendSignalToHive(newSignal) {
+  logText("🔄 Mengirim data ke Hive dengan merge...");
+
+  try {
+    // Ambil komentar terbaru dulu
+    const content = await hive.api.getContentAsync(HIVE.user, HIVE.commentPermlink);
+
+    if (!content || !content.body) {
+      logText("❌ Gagal ambil komentar Hive untuk merge.");
+      return;
+    }
+
+    lastHiveCommentBody = content.body;
+
+    // Parse body komentar JSON signaling array
+    let oldSignals = [];
+    try {
+      oldSignals = JSON.parse(lastHiveCommentBody);
+      if (!Array.isArray(oldSignals)) oldSignals = [];
+    } catch {
+      oldSignals = [];
+    }
+
+    // Gabungkan signaling lama dan baru (hindari duplikat berdasarkan id)
+    const allSignalsMap = new Map();
+    oldSignals.forEach((sig) => {
+      allSignalsMap.set(signalId(sig), sig);
+    });
+    allSignalsMap.set(signalId(newSignal), newSignal); // Add/update newSignal
+
+    const mergedSignals = Array.from(allSignalsMap.values());
+
+    // Kirim komentar update ke Hive (edit komentar)
+    hive.broadcast.comment(
+      HIVE.key,
+      HIVE.parentAuthor,
+      HIVE.parentPermlink,
+      HIVE.user,
+      HIVE.commentPermlink,
+      "",
+      JSON.stringify(mergedSignals),
+      JSON.stringify({ app: "mesh-signaling", tags: ["comment"] }),
+      (err, result) => {
+        if (err) {
+          logText("❌ Gagal kirim ke Hive: " + err.message);
+          return;
+        }
+        logText("✅ Komentar Hive diperbarui");
+        lastHiveCommentBody = JSON.stringify(mergedSignals);
+        // Update virtual signaling lokal
+        updateVirtualSignaling(mergedSignals);
+      }
+    );
+  } catch (e) {
+    logText("❌ Error saat kirim ke Hive: " + e.message);
+  }
+}
+
+/* =========================
+   UPDATE VIRTUAL SIGNALING DARI DATA HIVE
+========================= */
+function updateVirtualSignaling(hiveSignals) {
+  hiveSignals.forEach((sig) => {
+    const id = signalId(sig);
+    if (!processedSignals.has(id) && sig.from !== myId) {
+      virtualSignaling.push(sig);
+    }
+  });
+}
+
+/* =========================
+   AMBIL DATA HIVE DAN PROCESSING SIGNALING
+========================= */
+async function checkHiveForSignaling() {
+  logText("🔄 Memulai cek signaling dari Hive...");
+
+  try {
+    const content = await hive.api.getContentAsync(HIVE.user, HIVE.commentPermlink);
+    if (!content || !content.body) {
+      logText("❌ Gagal ambil komentar Hive");
+      return;
+    }
+
+    hiveContentEl.value = content.body;
+
+    let signals = [];
+    try {
+      signals = JSON.parse(content.body);
+      if (!Array.isArray(signals)) signals = [];
+    } catch {
+      signals = [];
+    }
+
+    // Update virtual signaling
+    updateVirtualSignaling(signals);
+
+    // Proses signaling baru (offer/answer)
+    const didProcess = processVirtualSignaling();
+
+    if (!didProcess) {
+      logText("ℹ️ Tidak ada signaling baru diproses");
+    }
+  } catch (e) {
+    logText("❌ Error ambil signaling Hive: " + e.message);
+  }
+}
+
+/* =========================
+   BROADCAST PESAN KE SEMUA PEER
+========================= */
+function broadcast() {
+  const msg = messageInput.value.trim();
+  if (!msg) return alert("Isi pesan dulu");
+
+  for (const id in peers) {
+    if (peers[id].connected) {
+      peers[id].send(JSON.stringify({ from: myId, text: msg }));
+    }
+  }
+  logText(`🗨️ Kamu: ${msg}`);
+  messageInput.value = "";
+}
+
+/* =========================
+   MANUAL LOAD HIVE COMMENT
+========================= */
+function loadHiveComment() {
+  checkHiveForSignaling();
+}
+
+/* =========================
+   POLLING PERIODIK CEK HIVE
+========================= */
+setInterval(() => {
+  checkHiveForSignaling();
+}, POLLING_INTERVAL);
+
+/* =========================
+   PROMISIFY hive.api.getContent
+========================= */
+hive.api.getContentAsync = function(author, permlink) {
+  return new Promise((resolve, reject) => {
+    hive.api.getContent(author, permlink, (err, result) => {
+      if (err) reject(err);
+      else resolve(result);
+    });
+  });
+};
 </script>
 
 </body>
