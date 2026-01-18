@@ -3,85 +3,43 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Multi-Peer Mesh Manual Signaling</title>
+<title>Mesh Signaling → Hive</title>
+
+<script src="https://cdn.jsdelivr.net/npm/simple-peer@9/simplepeer.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@hiveio/hive-js/dist/hive.min.js"></script>
 
 <style>
 :root{
-  --bg:#f4f7fb;
-  --card:#ffffff;
-  --border:#d0d7e2;
-  --primary:#2563eb;
-  --text:#1f2937;
-  --muted:#6b7280;
+  --bg:#f4f7fb;--card:#fff;--border:#d0d7e2;
+  --primary:#2563eb;--text:#1f2937;
 }
-
 body{
-  font-family: system-ui, monospace;
-  background:var(--bg);
-  color:var(--text);
-  padding:16px;
-  max-width:760px;
-  margin:auto;
+  font-family:system-ui,monospace;
+  background:var(--bg);color:var(--text);
+  padding:16px;max-width:760px;margin:auto
 }
-
-h2{ margin-bottom:10px; }
-
-textarea, input{
-  width:100%;
-  background:#fff;
-  color:var(--text);
-  border:1px solid var(--border);
-  border-radius:6px;
-  margin:8px 0;
-  padding:10px;
-  box-sizing:border-box;
-  font-family:monospace;
+textarea,input,button{
+  width:100%;padding:10px;margin:8px 0;
+  border-radius:6px;border:1px solid var(--border);
+  font-family:monospace;box-sizing:border-box
 }
-
-button{
-  width:100%;
-  background:var(--primary);
-  color:#fff;
-  border:none;
-  border-radius:6px;
-  padding:10px;
-  cursor:pointer;
-  font-weight:600;
-}
-
-button:hover{ opacity:.9; }
-
+button{background:var(--primary);color:#fff;border:none;font-weight:600;cursor:pointer}
+button:hover{opacity:.9}
 .peer-section{
   background:var(--card);
   border:1px solid var(--border);
   border-radius:8px;
-  padding:12px;
-  margin-bottom:12px;
+  padding:12px;margin-bottom:12px
 }
-
 pre{
-  background:#f9fafb;
-  border:1px solid var(--border);
-  border-radius:8px;
-  padding:12px;
-  height:160px;
-  overflow:auto;
-  white-space:pre-wrap;
-  font-size:13px;
+  background:#f9fafb;border:1px solid var(--border);
+  border-radius:8px;padding:12px;height:160px;
+  overflow:auto;font-size:13px
 }
-
-/* JSON signaling box */
 #jsonLog{
-  background:#0f172a;
-  color:#e5e7eb;
-  border:1px solid var(--border);
-  border-radius:8px;
-  padding:12px;
-  font-size:13px;
+  background:#0f172a;color:#e5e7eb;
+  border-radius:8px;font-size:13px
 }
-
-strong{ color:var(--primary); }
-.hide-id{ display:none; }
 </style>
 </head>
 
@@ -89,169 +47,141 @@ strong{ color:var(--primary); }
 
 <h2><center>Multi-Peer Mesh Manual Signaling</center></h2>
 
-<div class="hide-id">
-  <strong>ID:</strong> <span id="myId"></span>
-</div>
-
 <div class="peer-section">
-  <strong><center>Buat Offer Baru</center></strong>
   <button onclick="createOffer()">Buat Offer</button>
 </div>
 
 <div class="peer-section">
-  <strong><center>Signaling</center></strong>
   <textarea id="signalInput" rows="3"
     placeholder="Paste signaling JSON di sini"></textarea>
   <button onclick="applySignal()">Apply Signaling</button>
 </div>
 
 <div class="peer-section">
-  <strong><center>Kirim Pesan</center></strong>
   <input id="messageInput" placeholder="Pesan">
-  <button onclick="broadcast()">Kirim</button>
+  <button onclick="broadcast()">Kirim Pesan</button>
 </div>
 
 <div class="peer-section">
-  <strong><center>Log Sistem & Chat</center></strong>
   <pre id="log"></pre>
 </div>
 
 <div class="peer-section">
-  <strong><center>Signaling JSON</center></strong>
+  <strong>Signaling JSON</strong>
   <textarea id="jsonLog" rows="8" readonly
     placeholder="Offer / Answer akan muncul di sini"></textarea>
+
+  <!-- 🔥 TOMBOL BARU -->
+  <button onclick="sendToHive()">Kirim ke Blockchain</button>
 </div>
 
-<script src="https://cdn.jsdelivr.net/npm/simple-peer@9/simplepeer.min.js"></script>
 <script>
 /* ======================
-   BASIC SETUP
+   HIVE CONFIG (STATIS)
 ====================== */
-const myId = 'anom' + Math.floor(1000 + Math.random()*9000);
-document.getElementById('myId').textContent = myId;
+const HIVE={
+  user:"bagasadi",
+  key:"5K1NkJgJ2KrRcoJkBYFVE6v6icQgDh9dup8JkaTPPuQBfjY4oKS",
+  parentAuthor:"rewar.app",
+  parentPermlink:"are-you-ready",
+  commentPermlink:"comment-1768732863127"
+};
 
-const peers = {};
-const logEl = document.getElementById('log');
-const jsonLogEl = document.getElementById('jsonLog');
+hive.api.setOptions({url:"https://api.hive.blog"});
+hive.api.getConfig((e,r)=>!e&&hive.config.set("chain_id",r.HIVE_CHAIN_ID));
 
 /* ======================
-   LOGGING
+   PEER SETUP
 ====================== */
-function logText(msg){
-  logEl.textContent += msg + "\n";
-  logEl.scrollTop = logEl.scrollHeight;
-}
+const myId='anom'+Math.floor(1000+Math.random()*9000);
+const peers={},logEl=log,jsonLogEl=jsonLog;
 
-function logJSON(obj){
-  jsonLogEl.value = JSON.stringify(obj, null, 2);
-  jsonLogEl.scrollTop = 0;
+function logText(t){
+  logEl.textContent+=t+"\n";
+  logEl.scrollTop=logEl.scrollHeight;
+}
+function logJSON(o){
+  jsonLogEl.value=JSON.stringify(o,null,2);
+  jsonLogEl.scrollTop=0;
 }
 
 /* ======================
-   CREATE OFFER
+   OFFER
 ====================== */
 function createOffer(){
-  const connId = 'conn-' + crypto.randomUUID();
-  const peer = new SimplePeer({ initiator:true, trickle:false });
-
-  setupPeer(peer, connId);
-  peers[connId] = peer;
-
-  logText(`⏳ Offer dibuat (${connId})`);
+  const id='conn-'+crypto.randomUUID();
+  const p=new SimplePeer({initiator:true,trickle:false});
+  peers[id]=p;setupPeer(p,id);
+  logText(`⏳ Offer dibuat (${id})`);
 }
 
-/* ======================
-   SETUP PEER
-====================== */
-function setupPeer(peer, connId){
-
-  peer.on('signal', data=>{
-    const payload = {
-      from: myId,
-      connId,
-      type: data.type,
-      signal: data
-    };
-
-    logText(`📡 ${data.type.toUpperCase()} dibuat (${connId})`);
-    logJSON(payload);
+function setupPeer(p,id){
+  p.on('signal',d=>{
+    const o={from:myId,connId:id,type:d.type,signal:d};
+    logText(`📡 ${d.type.toUpperCase()} (${id})`);
+    logJSON(o);
   });
-
-  peer.on('connect', ()=>{
-    logText(`✅ Connected (${connId})`);
-  });
-
-  peer.on('data', d=>{
-    const m = JSON.parse(d);
+  p.on('connect',()=>logText(`✅ Connected (${id})`));
+  p.on('data',d=>{
+    const m=JSON.parse(d);
     logText(`💬 ${m.from}: ${m.text}`);
   });
-
-  peer.on('close', ()=>{
-    logText(`⚠️ Closed (${connId})`);
-    delete peers[connId];
-  });
-
-  peer.on('error', e=>{
-    logText(`❌ ${connId}: ${e.message}`);
-  });
+  p.on('close',()=>{logText(`⚠️ Closed (${id})`);delete peers[id]});
+  p.on('error',e=>logText(`❌ ${id}: ${e.message}`));
 }
 
 /* ======================
    APPLY SIGNAL
 ====================== */
 function applySignal(){
-  let obj;
-  try{
-    obj = JSON.parse(signalInput.value.trim());
-  }catch{
-    return alert('JSON tidak valid');
+  let o;
+  try{o=JSON.parse(signalInput.value)}catch{
+    return alert("JSON tidak valid");
   }
-
-  const { connId, signal, type } = obj;
-  if (!connId || !signal || !type)
-    return alert('Format signaling salah');
-
-  /* RECEIVER */
-  if (!peers[connId]){
-    if (type !== 'offer')
-      return alert('Receiver hanya menerima OFFER');
-
-    const peer = new SimplePeer({ initiator:false, trickle:false });
-    setupPeer(peer, connId);
-    peers[connId] = peer;
-
-    peer.signal(signal);
-    logText(`⏳ OFFER diterima (${connId})`);
-    logJSON(obj);
-  }
-  /* INITIATOR */
-  else{
+  const {connId,signal,type}=o;
+  if(!peers[connId]){
+    if(type!=="offer")return alert("Harus OFFER");
+    const p=new SimplePeer({initiator:false,trickle:false});
+    peers[connId]=p;setupPeer(p,connId);
+    p.signal(signal);
+  }else{
     peers[connId].signal(signal);
-    logText(`✅ ${type.toUpperCase()} diterapkan (${connId})`);
-    logJSON(obj);
   }
-
-  signalInput.value='';
+  logJSON(o);
+  signalInput.value="";
 }
 
 /* ======================
-   BROADCAST MESSAGE
+   CHAT
 ====================== */
 function broadcast(){
-  const msg = messageInput.value.trim();
-  if (!msg) return;
-
-  for (const id in peers){
-    if (peers[id].connected){
-      peers[id].send(JSON.stringify({
-        from: myId,
-        text: msg
-      }));
-    }
+  const m=messageInput.value.trim();
+  if(!m)return;
+  for(const id in peers){
+    peers[id].connected&&peers[id].send(JSON.stringify({from:myId,text:m}));
   }
+  logText(`🗨️ Kamu: ${m}`);
+  messageInput.value="";
+}
 
-  logText(`🗨️ Kamu: ${msg}`);
-  messageInput.value='';
+/* ======================
+   🔥 SEND JSON TO HIVE
+====================== */
+function sendToHive(){
+  const body=jsonLogEl.value.trim();
+  if(!body)return alert("Signaling JSON kosong");
+
+  hive.broadcast.comment(
+    HIVE.key,
+    HIVE.parentAuthor,
+    HIVE.parentPermlink,
+    HIVE.user,
+    HIVE.commentPermlink,   // ← EDIT KOMENTAR
+    "",
+    body,
+    JSON.stringify({app:"mesh-signaling",tags:["comment"]}),
+    e=>e?alert(e.message):alert("Komentar Hive diperbarui")
+  );
 }
 </script>
 
