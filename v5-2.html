@@ -1,0 +1,388 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Mesh Signaling Hive – Routing & Forwarding</title>
+
+<script src="https://cdn.jsdelivr.net/npm/simple-peer@9/simplepeer.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@hiveio/hive-js/dist/hive.min.js"></script>
+
+<style>
+body{font-family:system-ui;background:#f4f7fb;padding:12px}
+button,input{padding:8px;margin:4px}
+pre{background:#111;color:#0f0;padding:10px;height:240px;overflow:auto;white-space: pre-wrap;}
+#peersStatus {
+  background:#fff;
+  border:1px solid #ccc;
+  padding:10px;
+  border-radius:6px;
+  font-family: monospace;
+  margin-top: 12px;
+  max-height: 160px;
+  overflow-y: auto;
+  color: #333;
+  white-space: pre-wrap;
+}
+</style>
+</head>
+<body>
+
+<h3>Mesh Signaling Hive – Routing & Forwarding</h3>
+
+<button onclick="createOffer()">Buat Offer</button><br>
+<input id="targetNode" placeholder="Tujuan Node ID, kosong = broadcast" style="width:100%;margin:8px 0;padding:6px;font-family: monospace;"/>
+<input id="msg" placeholder="pesan"/>
+<button onclick="sendMessage()">Kirim Pesan</button>
+
+<pre id="log"></pre>
+
+<div id="peersStatus"><b>Status peers & routing table akan muncul di sini...</b></div>
+
+<script>
+/* ========== HIVE CONFIG ========== */
+const HIVE = {
+  user:"kingtherion",
+  key:"5KJpZcMVmn3eskXvfmYQypNj7L7ZJ4gQfGf8Vmi2mmEtB4bFxNr",
+  parentAuthor:"kingtherion",
+  parentPermlink:"senja-berganti-malam",
+  commentPermlink:"comment-1740462707630"
+};
+
+hive.api.setOptions({ url:"https://api.hive.blog" });
+hive.api.getConfig((e,r)=>!e&&hive.config.set("chain_id",r.HIVE_CHAIN_ID));
+hive.api.getContentAsync = (a,p) => new Promise((res,rej)=>{
+  hive.api.getContent(a,p,(e,r)=>e?rej(e):res(r));
+});
+
+/* ========== STATE ========== */
+const myId = "node-"+Math.random().toString(36).slice(2,7);
+const peers = {}; // connId => SimplePeer instance
+const processedSignals = new Set();
+
+const directPeers = new Set(); // connId yang terhubung langsung
+const knownPeers = new Set([myId]); // semua nodeId yg kita tahu
+const peerRoutingTable = {}; // nodeId -> connId untuk routing pesan
+peerRoutingTable[myId] = null; // node lokal, no conn
+
+const seenEvents = new Set();
+
+let pollTimer = null;
+
+/* ========== LOGGING ========== */
+const logEl = document.getElementById("log");
+function log(t){
+  logEl.textContent += t + "\n";
+  logEl.scrollTop = logEl.scrollHeight;
+}
+
+/* ========== UPDATE PEERS STATUS ========== */
+function updatePeersStatus(){
+  const container = document.getElementById("peersStatus");
+  let text = "";
+
+  text += `My Node ID: ${myId}\n\n`;
+
+  text += `Known Peers (${knownPeers.size}):\n` + Array.from(knownPeers).join(", ") + "\n\n";
+  text += `Direct Peers (${directPeers.size}):\n`;
+  for (const connId of directPeers){
+    text += `- ConnID: ${connId}\n`;
+  }
+  text += "\nRouting Table (nodeId → connId):\n";
+  for (const [nodeId, connId] of Object.entries(peerRoutingTable)){
+    text += `- ${nodeId} → ${connId ? connId : "(local)"}\n`;
+  }
+
+  container.textContent = text;
+}
+
+/* ========== HELPERS ========== */
+function signalId(s){
+  return s.from + "_" + s.connId + "_" + s.type;
+}
+
+/* ========== BROADCAST RAW OBJ TO ALL DIRECT PEERS ========== */
+function broadcastRaw(obj){
+  for(const connId in peers){
+    const p = peers[connId];
+    if(p.connected){
+      p.send(JSON.stringify(obj));
+    }
+  }
+}
+
+/* ========== MESH EVENTS HANDLING ========== */
+function sendMeshEvent(evtType, peer=null){
+  const ev = {
+    type: "mesh-event",
+    evt: evtType,
+    id: `evt-${myId}-${Date.now()}`,
+    from: myId,
+    peer,
+    hops: 0,
+    ttl: 5,
+    peers: Array.from(knownPeers)
+  };
+  seenEvents.add(ev.id);
+  broadcastRaw(ev);
+}
+
+function handleMeshEvent(ev){
+  if(seenEvents.has(ev.id)) return;
+  if(ev.hops >= ev.ttl) return;
+
+  seenEvents.add(ev.id);
+  knownPeers.add(ev.from);
+
+  if(ev.peer) knownPeers.add(ev.peer);
+
+  // Update routing table based on sender of event
+  ev.peers.forEach(p => {
+    if(!knownPeers.has(p)){
+      knownPeers.add(p);
+      peerRoutingTable[p] = ev.from; // Jalur ke node baru via pengirim event
+    } else {
+      // jika node sudah ada tapi belum ada jalur, buat jalur
+      if(!peerRoutingTable[p]){
+        peerRoutingTable[p] = ev.from;
+      }
+    }
+  });
+
+  ev.hops++;
+  broadcastRaw(ev);
+  updatePeersStatus();
+}
+
+/* ========== ADAPTIVE POLLING HIVE ========== */
+function computeHiveInterval(){
+  const n = directPeers.size;
+  if(n <= 1) return 5000;
+  if(n === 2) return 10000;
+  if(n === 3) return 30000;
+  return 120000;
+}
+
+function restartPolling(){
+  if(pollTimer) clearTimeout(pollTimer);
+  const interval = computeHiveInterval();
+  log(`⏱️ Poll Hive tiap ${interval/1000}s`);
+  pollTimer = setTimeout(async () => {
+    await checkHive();
+    restartPolling();
+  }, interval);
+}
+
+/* ========== PEER SETUP ========== */
+function setupPeer(p, connId){
+  p.on("signal", sig => {
+    sendSignal({
+      from: myId,
+      connId: connId,
+      type: sig.type,
+      signal: sig
+    });
+  });
+
+  p.on("connect", () => {
+    directPeers.add(connId);
+    log(`✅ CONNECT ${connId}`);
+    // Update routing table: jalur ke node baru via connId (asumsi nodeId == connId for direct peers is not valid, so we send mesh-event instead)
+    sendMeshEvent("mesh:connect", connId);
+    updatePeersStatus();
+    restartPolling();
+  });
+
+  p.on("close", () => {
+    directPeers.delete(connId);
+    delete peers[connId];
+
+    // Hapus node-node yang jalurnya via connId ini
+    for(const [nodeId, routeConnId] of Object.entries(peerRoutingTable)){
+      if(routeConnId === connId){
+        delete peerRoutingTable[nodeId];
+        knownPeers.delete(nodeId);
+      }
+    }
+
+    log(`❌ CLOSE ${connId}`);
+    updatePeersStatus();
+    restartPolling();
+  });
+
+  p.on("data", d => {
+    try{
+      const msg = JSON.parse(d);
+      if(msg.type === "mesh-event"){
+        handleMeshEvent(msg);
+      } else if(msg.to && msg.to !== myId){
+        // Pesan untuk node lain, forward
+        forwardMessage(msg);
+      } else {
+        // Pesan untuk node ini
+        log(`💬 ${msg.from}: ${msg.text}`);
+      }
+    }catch(e){
+      log("⚠️ Error parsing message: " + e.message);
+    }
+  });
+
+  p.on("error", e => {
+    log(`❌ Peer error: ${e.message}`);
+  });
+}
+
+/* ========== CREATE OFFER ========== */
+function createOffer(){
+  const connId = "conn-"+crypto.randomUUID();
+  const p = new SimplePeer({initiator:true,trickle:false});
+  peers[connId] = p;
+  setupPeer(p, connId);
+  log(`⏳ Offer dibuat ${connId}`);
+  updatePeersStatus();
+}
+
+/* ========== SEND SIGNAL TO HIVE ========== */
+async function sendSignal(sig){
+  const c = await hive.api.getContentAsync(HIVE.user, HIVE.commentPermlink);
+  let arr = [];
+  try {
+    arr = JSON.parse(c.body) || [];
+  } catch {}
+
+  arr.push(sig);
+
+  hive.broadcast.comment(
+    HIVE.key,
+    HIVE.parentAuthor,
+    HIVE.parentPermlink,
+    HIVE.user,
+    HIVE.commentPermlink,
+    "",
+    JSON.stringify(arr),
+    "{}",
+    () => log(`📡 ${sig.type.toUpperCase()} → Hive`)
+  );
+}
+
+/* ========== CHECK HIVE FOR SIGNALS ========== */
+async function checkHive(){
+  log("🔍 cek Hive");
+  const c = await hive.api.getContentAsync(HIVE.user, HIVE.commentPermlink);
+  let arr = [];
+  try {
+    arr = JSON.parse(c.body) || [];
+  } catch {}
+
+  arr.forEach(sig => {
+    if(sig.from === myId) return;
+
+    const id = signalId(sig);
+    if(processedSignals.has(id)) return;
+    processedSignals.add(id);
+
+    if(!peers[sig.connId] && sig.type === "offer"){
+      const p = new SimplePeer({initiator:false,trickle:false});
+      peers[sig.connId] = p;
+      setupPeer(p, sig.connId);
+      p.signal(sig.signal);
+      log(`📥 APPLY OFFER ${sig.connId}`);
+      updatePeersStatus();
+    }
+    else if(peers[sig.connId]){
+      peers[sig.connId].signal(sig.signal);
+      log(`📥 APPLY ${sig.type} ${sig.connId}`);
+    }
+  });
+  updatePeersStatus();
+}
+
+/* ========== SEND MESSAGE ========== */
+function sendMessage(){
+  const targetNode = document.getElementById("targetNode").value.trim();
+  const msgText = document.getElementById("msg").value.trim();
+  if(!msgText) return alert("Masukkan pesan");
+
+  if(!targetNode){
+    // broadcast ke semua peer yang connected
+    log(`🗨️ Broadcast: ${msgText}`);
+    Object.values(peers).forEach(p => {
+      if(p.connected) p.send(JSON.stringify({
+        from: myId,
+        to: null,
+        text: msgText,
+        type: "chat"
+      }));
+    });
+    return;
+  }
+
+  // Jika targetNode == myId (kirim ke diri sendiri)
+  if(targetNode === myId){
+    log(`💬 Pesan untuk diri sendiri: ${msgText}`);
+    return;
+  }
+
+  // Kirim pesan ke node target via routing table
+  const viaConnId = peerRoutingTable[targetNode];
+  if(!viaConnId){
+    log(`⚠️ Tidak tahu jalur ke node ${targetNode}`);
+    return;
+  }
+  const peer = peers[viaConnId];
+  if(!peer || !peer.connected){
+    log(`⚠️ ConnId ${viaConnId} tidak terhubung`);
+    return;
+  }
+
+  // Kirim pesan ke peer yang jalur ke targetNode
+  peer.send(JSON.stringify({
+    from: myId,
+    to: targetNode,
+    text: msgText,
+    type: "chat"
+  }));
+
+  log(`🗨️ Kirim pesan ke ${targetNode} via ${viaConnId}: ${msgText}`);
+}
+
+/* ========== FORWARD MESSAGE ========== */
+function forwardMessage(msg){
+  if(!msg.to){
+    // Broadcast pesan jika tidak ada target (default)
+    Object.values(peers).forEach(p => {
+      if(p.connected) p.send(JSON.stringify(msg));
+    });
+    return;
+  }
+
+  if(msg.to === myId){
+    // Pesan untuk kita, tampilkan
+    log(`💬 Pesan untuk saya dari ${msg.from}: ${msg.text}`);
+    return;
+  }
+
+  // Pesan harus diteruskan ke node lain
+  const viaConnId = peerRoutingTable[msg.to];
+  if(!viaConnId){
+    log(`⚠️ Tidak tahu jalur forward ke node ${msg.to}`);
+    return;
+  }
+  const peer = peers[viaConnId];
+  if(!peer || !peer.connected){
+    log(`⚠️ ConnId ${viaConnId} tidak terhubung untuk forward`);
+    return;
+  }
+
+  // Kirim pesan ke peer yang jalur ke targetNode
+  peer.send(JSON.stringify(msg));
+  log(`🔄 Forward pesan ke ${msg.to} via ${viaConnId}`);
+}
+
+/* ========== START ========== */
+log(`🟢 Node ${myId} started`);
+restartPolling();
+</script>
+
+</body>
+</html>
