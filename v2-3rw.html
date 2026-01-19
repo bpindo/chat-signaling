@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Telegram Mesh Gossip Signaling</title>
+
+<script src="https://cdn.jsdelivr.net/npm/simple-peer@9/simplepeer.min.js"></script>
+
+<style>
+body{font-family:monospace;background:#f4f7fb;padding:16px}
+button,input,textarea{width:100%;margin:6px 0;padding:8px}
+pre{background:#0b1020;color:#9ef;padding:10px;height:200px;overflow:auto}
+</style>
+</head>
+
+<body>
+
+<h3>🌐 Telegram Mesh Gossip</h3>
+
+<button onclick="createOffer()">➕ CREATE OFFER</button>
+<button onclick="sendJSON()">📤 SEND JSON TO TELEGRAM</button>
+<button onclick="fetchTelegram()">📥 FETCH TELEGRAM</button>
+
+<textarea id="jsonBox" placeholder="JSON signaling"></textarea>
+<input id="msg" placeholder="message">
+<button onclick="broadcast()">SEND MESSAGE</button>
+
+<pre id="log"></pre>
+
+<script>
+/* ================= CONFIG ================= */
+const BOT_SEND = "8384730708:AAHjPCLYpW7wz2B5-jBxMJ17-kH1G1zXZuY";
+const BOT_READ = "359218339:AAF7KH-T3ihEPvHfWPJge_Ax9PdV9GQw2W0";
+const CHANNEL_ID = "-1003689025820";
+
+/* ================= STATE ================= */
+const myId = "anom" + Math.floor(Math.random()*9999);
+const peers = {};
+const meshGraph = {};     // GLOBAL KNOWLEDGE
+const seenEvents = new Set();
+
+let lastUpdateId = 0;
+let pollTimer = null;
+
+/* ================= UI ================= */
+const logEl = document.getElementById("log");
+const jsonBox = document.getElementById("jsonBox");
+function log(m){
+  logEl.textContent += `[${new Date().toLocaleTimeString()}] ${m}\n`;
+  logEl.scrollTop = logEl.scrollHeight;
+}
+log("🆔 myId = " + myId);
+
+/* ================= TELEGRAM ================= */
+function sendToTelegram(obj){
+  fetch(`https://api.telegram.org/bot${BOT_SEND}/sendMessage`,{
+    method:"POST",
+    headers:{ "Content-Type":"application/json" },
+    body:JSON.stringify({
+      chat_id: CHANNEL_ID,
+      text: JSON.stringify(obj)
+    })
+  }).then(()=>log("📤 sent to telegram"));
+}
+
+function fetchTelegram(){
+  fetch(`https://api.telegram.org/bot${BOT_READ}/getUpdates?offset=${lastUpdateId+1}`)
+    .then(r=>r.json())
+    .then(d=>{
+      if(!d.result) return;
+      d.result.forEach(u=>{
+        lastUpdateId = u.update_id;
+        const msg = u.channel_post || u.message;
+        if(!msg?.text) return;
+
+        try{
+          const evt = JSON.parse(msg.text);
+          handleEvent(evt);
+        }catch{}
+      });
+    });
+}
+
+/* ================= EVENT HANDLER ================= */
+function handleEvent(e){
+  const eid = JSON.stringify(e);
+  if(seenEvents.has(eid)) return;
+  seenEvents.add(eid);
+
+  if(e.type === "offer") handleOffer(e);
+  if(e.type === "answer") handleAnswer(e);
+  if(e.type === "mesh-connect") updateMesh(e.from, e.to);
+  if(e.type === "mesh-alive") updateMesh(e.from, e.peer);
+}
+
+/* ================= MESH ================= */
+function updateMesh(a,b){
+  meshGraph[a] ??= {};
+  meshGraph[b] ??= {};
+  meshGraph[a][b] = Date.now();
+  meshGraph[b][a] = Date.now();
+  updatePolling();
+}
+
+function nodeCount(){
+  return Object.keys(meshGraph).length || 1;
+}
+
+function updatePolling(){
+  const interval = 5000 + (nodeCount()-1)*6000;
+  if(pollTimer) clearInterval(pollTimer);
+  pollTimer = setInterval(fetchTelegram, interval);
+  log("⏱️ polling = " + interval + "ms | nodes=" + nodeCount());
+}
+
+/* ================= PEER ================= */
+function createOffer(){
+  const connId = "conn-" + crypto.randomUUID();
+  const p = new SimplePeer({ initiator:true, trickle:false });
+  peers[connId] = p;
+  setupPeer(p, connId);
+}
+
+function setupPeer(peer, connId){
+  peer.on("signal", d=>{
+    const payload = {
+      type: d.type,
+      from: myId,
+      connId,
+      sdp: d,
+      ts: Date.now()
+    };
+    jsonBox.value = JSON.stringify(payload,null,2);
+  });
+
+  peer.on("connect", ()=>{
+    log("✅ CONNECT " + connId);
+    peer.send(myId);
+
+    sendToTelegram({
+      type:"mesh-connect",
+      from: myId,
+      to: connId,
+      ts: Date.now()
+    });
+  });
+
+  peer.on("data", d=>{
+    log("💬 " + d);
+  });
+}
+
+function handleOffer(e){
+  if(e.from === myId) return;
+  if(peers[e.connId]) return;
+
+  const p = new SimplePeer({ initiator:false, trickle:false });
+  peers[e.connId] = p;
+  setupPeer(p, e.connId);
+  p.signal(e.sdp);
+}
+
+function handleAnswer(e){
+  const p = peers[e.connId];
+  if(p) p.signal(e.sdp);
+}
+
+/* ================= ACTION ================= */
+function sendJSON(){
+  if(!jsonBox.value) return;
+  sendToTelegram(JSON.parse(jsonBox.value));
+}
+
+function broadcast(){
+  const t = document.getElementById("msg").value;
+  Object.values(peers).forEach(p=>{
+    if(p.connected) p.send(myId+": "+t);
+  });
+}
+
+/* ================= START ================= */
+updatePolling();
+</script>
+
+</body>
+</html>
