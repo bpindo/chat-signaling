@@ -3,117 +3,31 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Obrolan Bebas</title>
+<title>Stateless Mesh + Beacon Node</title>
 
 <style>
-:root{
-  --bg:#0f172a;
-  --card:#020617;
-  --me:#2563eb;
-  --other:#334155;
-  --text:#e5e7eb;
-  --muted:#94a3b8;
-}
-*{box-sizing:border-box}
-body{
-  margin:0;
-  font-family:system-ui,monospace;
-  background:var(--bg);
-  color:var(--text);
-  height:100vh;
-  display:flex;
-  flex-direction:column;
-}
-header{
-  padding:14px;
-  background:#020617;
-  text-align:center;
-}
-header small{color:var(--muted);font-size:12px}
-#chat{
-  flex:1;
-  padding:14px;
-  overflow-y:auto;
-  display:flex;
-  flex-direction:column;
-  gap:10px;
-}
-.msg{
-  max-width:80%;
-  padding:10px 14px;
-  border-radius:14px;
-  line-height:1.4;
-}
-.me{align-self:flex-end;background:var(--me)}
-.other{align-self:flex-start;background:var(--other)}
-footer{
-  display:flex;
-  gap:8px;
-  padding:10px;
-  background:#020617;
-}
-footer input{
-  flex:1;
-  padding:12px;
-  border-radius:12px;
-  border:1px solid #1e293b;
-  background:#020617;
-  color:var(--text);
-}
-footer button{
-  padding:12px 16px;
-  border:none;
-  border-radius:12px;
-  background:var(--me);
-  color:white;
-}
-#startBtn{
-  position:fixed;
-  right:16px;
-  bottom:80px;
-  padding:14px;
-  border-radius:50%;
-  border:none;
-  background:#16a34a;
-  color:white;
-  font-size:18px;
-}
-
-/* DEBUG */
-#debugPanel{
-  display:none;
-  position:fixed;
-  inset:0;
-  background:#020617;
-  color:#e5e7eb;
-  padding:16px;
-  overflow:auto;
-  z-index:10;
-}
-pre{white-space:pre-wrap;font-size:12px}
+body{font-family:monospace;background:#f4f7fb;padding:20px}
+button,input{width:100%;margin-top:8px;padding:10px}
+pre{background:#0f172a;color:#e5e7eb;padding:10px;height:220px;overflow:auto}
+.toggle{background:#16a34a}
+.toggle.off{background:#9ca3af}
 </style>
 </head>
 
 <body>
 
-<header id="title">
-  🌐 Obrolan Bebas
-  <small>P2P tanpa server</small>
-</header>
+<h3>🌐 Stateless P2P Mesh</h3>
 
-<div id="chat"></div>
+<button onclick="makeOffer()">➕ Buat Offer</button>
 
-<footer>
-  <input id="msgInput" placeholder="Ketik pesan…">
-  <button onclick="sendUI()">⏎</button>
-</footer>
+<button id="beaconBtn" class="toggle off" onclick="toggleBeacon()">
+📡 Pusat Node: OFF
+</button>
 
-<button id="startBtn" onclick="makeOffer()">➕</button>
+<input id="msg" placeholder="Pesan">
+<button onclick="sendMsg()">Kirim</button>
 
-<div id="debugPanel">
-  <h3>Debug Log</h3>
-  <pre id="debugLog"></pre>
-</div>
+<pre id="log"></pre>
 
 <script src="https://cdn.jsdelivr.net/npm/simple-peer@9/simplepeer.min.js"></script>
 <script>
@@ -121,30 +35,25 @@ pre{white-space:pre-wrap;font-size:12px}
 const BOT_SEND = "8384730708:AAHjPCLYpW7wz2B5-jBxMJ17-kH1G1zXZuY";
 const BOT_READ = "359218339:AAF7KH-T3ihEPvHfWPJge_Ax9PdV9GQw2W0";
 const CHANNEL = "-1003689025820";
-const POLL = 5000;
+const POLL_INTERVAL = 5000;
+const HELLO_INTERVAL = 12000;
 
-/* ===== STATE LOKAL ===== */
+/* ===== STATE ===== */
 const id = "p-" + Math.random().toString(36).slice(2,7);
 const peers = {};
 let lastUpdate = 0;
+let beaconOn = false;
+let helloTimer = null;
 
-/* ===== UI ===== */
-const chat = document.getElementById("chat");
-const msgInput = document.getElementById("msgInput");
-const debugLog = document.getElementById("debugLog");
+const logEl = document.getElementById("log");
+const log = m => {
+  logEl.textContent += m + "\n";
+  logEl.scrollTop = logEl.scrollHeight;
+};
 
-function addMsg(text, me=false){
-  const d = document.createElement("div");
-  d.className = "msg " + (me?"me":"other");
-  d.textContent = text;
-  chat.appendChild(d);
-  chat.scrollTop = chat.scrollHeight;
-}
-function log(m){
-  debugLog.textContent += m + "\n";
-}
+log("ID: " + id);
 
-/* ===== TELEGRAM ===== */
+/* ===== TELEGRAM SEND ===== */
 function sendTG(obj){
   fetch(`https://api.telegram.org/bot${BOT_SEND}/sendMessage`,{
     method:"POST",
@@ -163,16 +72,11 @@ function makeOffer(){
   peers[cid] = p;
 
   p.on("signal", s=>{
-    sendTG({t:"offer",from:id,connId:cid,signal:s});
+    sendTG({t:"offer", from:id, connId:cid, signal:s});
   });
 
-  p.on("connect", ()=>{
-    addMsg("🟢 Terhubung",false);
-  });
-
-  p.on("data", d=>{
-    addMsg(d.toString(),false);
-  });
+  p.on("connect", ()=>log("✅ connected " + cid));
+  p.on("data", d=>log("💬 " + d));
 }
 
 function answerOffer(o){
@@ -180,18 +84,36 @@ function answerOffer(o){
   peers[o.connId] = p;
 
   p.on("signal", s=>{
-    sendTG({t:"answer",from:id,connId:o.connId,signal:s});
+    sendTG({t:"answer", from:id, connId:o.connId, signal:s});
   });
 
-  p.on("connect", ()=>{
-    addMsg("🟢 Terhubung",false);
-  });
-
-  p.on("data", d=>{
-    addMsg(d.toString(),false);
-  });
+  p.on("connect", ()=>log("✅ connected " + o.connId));
+  p.on("data", d=>log("💬 " + d));
 
   p.signal(o.signal);
+}
+
+/* ===== BEACON ===== */
+function toggleBeacon(){
+  beaconOn = !beaconOn;
+  const btn = document.getElementById("beaconBtn");
+
+  if(beaconOn){
+    btn.textContent = "📡 Pusat Node: ON";
+    btn.classList.remove("off");
+    log("🟢 Beacon ON");
+    helloTimer = setInterval(sendHello, HELLO_INTERVAL);
+    sendHello();
+  }else{
+    btn.textContent = "📡 Pusat Node: OFF";
+    btn.classList.add("off");
+    log("⚪ Beacon OFF");
+    clearInterval(helloTimer);
+  }
+}
+
+function sendHello(){
+  sendTG({t:"hello", from:id, ts:Date.now()});
 }
 
 /* ===== POLLING ===== */
@@ -211,10 +133,20 @@ async function poll(){
       const o = JSON.parse(m.text);
       if(o.from === id) return;
 
-      if(o.t==="offer" && !peers[o.connId]){
-        answerOffer(o);
+      if(o.t === "hello"){
+        // node biasa → buat offer ke beacon
+        if(!beaconOn && Object.keys(peers).length < 5){
+          makeOffer();
+        }
       }
-      if(o.t==="answer"){
+
+      if(o.t === "offer"){
+        if(!peers[o.connId]){
+          answerOffer(o);
+        }
+      }
+
+      if(o.t === "answer"){
         const p = peers[o.connId];
         if(p) p.signal(o.signal);
       }
@@ -223,28 +155,17 @@ async function poll(){
 }
 
 /* ===== CHAT ===== */
-function sendUI(){
-  const v = msgInput.value.trim();
-  if(!v) return;
-  addMsg(v,true);
+function sendMsg(){
+  const v = msg.value;
   for(const k in peers){
     if(peers[k].connected) peers[k].send(v);
   }
-  msgInput.value="";
+  log("me: " + v);
+  msg.value="";
 }
 
-/* ===== DEBUG TOGGLE ===== */
-let tap=0;
-title.onclick=()=>{
-  tap++;
-  if(tap>=5){
-    debugPanel.style.display =
-      debugPanel.style.display==="block"?"none":"block";
-    tap=0;
-  }
-};
-
-setInterval(poll,POLL);
+/* ===== START ===== */
+setInterval(poll, POLL_INTERVAL);
 </script>
 
 </body>
