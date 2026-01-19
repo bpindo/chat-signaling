@@ -3,135 +3,125 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>P2P Mesh via Mini Railway</title>
+<title>🚄 Mini Railway Mesh</title>
 
 <style>
 body{
-  font-family: system-ui, monospace;
-  background:#f4f7fb;
-  padding:20px;
-  max-width:600px;
-  margin:auto;
-}
-button,input{
-  width:100%;
-  padding:12px;
-  margin-top:10px;
-  font-family:monospace;
-}
-pre{
+  font-family: system-ui, sans-serif;
   background:#0f172a;
   color:#e5e7eb;
-  padding:12px;
-  height:200px;
-  overflow:auto;
+  margin:0;
+  padding:20px;
+}
+h3{margin-bottom:10px}
+#status{
+  padding:8px;
+  background:#1e293b;
   border-radius:6px;
+  margin-bottom:10px;
+}
+#chat{
+  background:#020617;
+  border-radius:8px;
+  padding:10px;
+  height:260px;
+  overflow:auto;
+  font-size:14px;
+}
+.me{color:#38bdf8}
+.other{color:#a5b4fc}
+input,button{
+  width:100%;
+  padding:12px;
+  margin-top:8px;
+  font-size:16px;
+  border-radius:8px;
+  border:none;
+}
+input{background:#020617;color:#e5e7eb}
+button{
+  background:#2563eb;
+  color:white;
+}
+button:disabled{
+  background:#475569;
 }
 </style>
 </head>
 
 <body>
 
-<h3>🚄 P2P Mesh (Mini Railway)</h3>
+<h3>🚄 Mini Railway Mesh</h3>
 
-<button onclick="makeOffer()">➕ Buat Offer</button>
+<div id="status">🔄 Connecting…</div>
 
-<input id="msg" placeholder="Ketik pesan">
-<button onclick="sendMsg()">Kirim</button>
+<div id="chat"></div>
 
-<pre id="log"></pre>
+<input id="msg" placeholder="Tulis pesan…">
+<button id="sendBtn" disabled>Kirim</button>
 
-<script src="https://cdn.jsdelivr.net/npm/simple-peer@9/simplepeer.min.js"></script>
 <script>
 /* ================= CONFIG ================= */
-const WS_URL = "ws://192.168.1.10:8080";
+const WS_URL = "ws://192.168.1.10:8080"; // GANTI JIKA PERLU
+const myId = Math.random().toString(36).slice(2,7);
 
-/* ================= STATE ================= */
-const myId = "u-" + Math.random().toString(36).slice(2,7);
-const peers = {};
-const logEl = document.getElementById("log");
+/* ================= UI ================= */
+const statusEl = document.getElementById("status");
+const chatEl = document.getElementById("chat");
+const msgEl = document.getElementById("msg");
+const sendBtn = document.getElementById("sendBtn");
 
-function log(m){
-  logEl.textContent += m + "\n";
-  logEl.scrollTop = logEl.scrollHeight;
+function log(text, cls){
+  const d = document.createElement("div");
+  d.textContent = text;
+  d.className = cls;
+  chatEl.appendChild(d);
+  chatEl.scrollTop = chatEl.scrollHeight;
 }
 
-log("🆔 ID: " + myId);
+/* ================= WS ================= */
+let ws;
+let retry = 0;
 
-/* ================= WEBSOCKET ================= */
-const ws = new WebSocket(WS_URL);
+function connect(){
+  ws = new WebSocket(WS_URL);
 
-ws.onopen = () => log("🟢 WebSocket connected");
-ws.onerror = () => log("❌ WebSocket error");
-ws.onclose = () => log("🔴 WebSocket closed");
+  ws.onopen = () => {
+    retry = 0;
+    statusEl.textContent = "🟢 Connected";
+    sendBtn.disabled = false;
+  };
 
-ws.onmessage = e => {
-  try{
-    const msg = JSON.parse(e.data);
-    if(msg.from === myId) return;
+  ws.onmessage = e => {
+    const o = JSON.parse(e.data);
+    if(o.from === myId) return;
+    log(o.text, "other");
+  };
 
-    if(msg.type === "offer"){
-      answerOffer(msg);
-    }
+  ws.onerror = () => {
+    ws.close();
+  };
 
-    if(msg.type === "answer"){
-      const p = peers[msg.connId];
-      if(p) p.signal(msg.signal);
-    }
-  }catch{}
+  ws.onclose = () => {
+    sendBtn.disabled = true;
+    statusEl.textContent = "🔴 Disconnected — reconnecting…";
+    retry++;
+    setTimeout(connect, Math.min(3000 * retry, 10000));
+  };
+}
+
+connect();
+
+/* ================= SEND ================= */
+sendBtn.onclick = () => {
+  const text = msgEl.value.trim();
+  if(!text || ws.readyState !== 1) return;
+
+  const payload = { from: myId, text };
+  ws.send(JSON.stringify(payload));
+  log("me: " + text, "me");
+  msgEl.value = "";
 };
-
-/* ================= P2P ================= */
-function makeOffer(){
-  const connId = crypto.randomUUID();
-  const p = new SimplePeer({initiator:true,trickle:false});
-  peers[connId] = p;
-
-  p.on("signal", s=>{
-    ws.send(JSON.stringify({
-      type:"offer",
-      from:myId,
-      connId,
-      signal:s
-    }));
-  });
-
-  p.on("connect", ()=>log("✅ CONNECTED " + connId));
-  p.on("data", d=>log("💬 " + d));
-}
-
-function answerOffer(o){
-  if(peers[o.connId]) return;
-
-  const p = new SimplePeer({initiator:false,trickle:false});
-  peers[o.connId] = p;
-
-  p.on("signal", s=>{
-    ws.send(JSON.stringify({
-      type:"answer",
-      from:myId,
-      connId:o.connId,
-      signal:s
-    }));
-  });
-
-  p.on("connect", ()=>log("✅ CONNECTED " + o.connId));
-  p.on("data", d=>log("💬 " + d));
-
-  p.signal(o.signal);
-}
-
-/* ================= CHAT ================= */
-function sendMsg(){
-  const v = msg.value;
-  for(const k in peers){
-    if(peers[k].connected){
-      peers[k].send(v);
-    }
-  }
-  log("me: " + v);
-  msg.value="";
-}
 </script>
 
 </body>
