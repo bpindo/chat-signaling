@@ -1,132 +1,129 @@
 <!DOCTYPE html>
 <html lang="id">
 <head>
-  <meta charset="UTF-8">
-  <title>Nostr Relay – Realtime Signaling</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta charset="UTF-8">
+<title>Nostr Relay FIX – Realtime Signaling</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
 
-  <style>
-    body {
-      font-family: system-ui, sans-serif;
-      background: #111;
-      color: #eee;
-      padding: 12px;
-    }
-    h2 { margin-bottom: 8px; }
-    #log {
-      height: 60vh;
-      overflow-y: auto;
-      background: #000;
-      padding: 8px;
-      font-size: 13px;
-      border-radius: 6px;
-      margin-bottom: 10px;
-    }
-    input, textarea, button {
-      width: 100%;
-      margin-top: 6px;
-      padding: 8px;
-      border-radius: 4px;
-      border: none;
-      font-size: 14px;
-    }
-    button {
-      background: #00ff9c;
-      color: #000;
-      font-weight: bold;
-      cursor: pointer;
-    }
-  </style>
+<style>
+body {
+  background:#0f0f0f;
+  color:#eaeaea;
+  font-family:system-ui,sans-serif;
+  padding:10px;
+}
+h3 { margin-bottom:6px }
+#log {
+  background:#000;
+  height:60vh;
+  overflow:auto;
+  padding:8px;
+  border-radius:6px;
+  font-size:13px;
+}
+input, textarea, button {
+  width:100%;
+  margin-top:6px;
+  padding:8px;
+  border:none;
+  border-radius:4px;
+  font-size:14px;
+}
+button {
+  background:#00ff9c;
+  color:#000;
+  font-weight:bold;
+}
+</style>
 </head>
+
 <body>
 
-<h2>🔗 Nostr Relay Signaling (Mesh)</h2>
+<h3>🔗 Nostr Relay – FIX (Ephemeral)</h3>
 
 <div id="log"></div>
 
-<input id="room" placeholder="Room ID" value="mesh-123" />
-<textarea id="payload" rows="4" placeholder="JSON payload (offer / answer / ICE)"></textarea>
+<input id="room" value="mesh-123" placeholder="Room ID">
+<textarea id="payload" rows="4"
+placeholder='Contoh:
+{"type":"offer","from":"A"}'></textarea>
+
 <button onclick="sendEvent()">KIRIM EVENT</button>
 
 <script>
-/* =============================
-   KONFIGURASI
-============================= */
-const RELAY_URL = "wss://relay.damus.io";
-const KIND_SIGNAL = 30001;
+/* =========================
+   KONFIG
+========================= */
+const RELAY = "wss://relay.damus.io";
+const KIND = 20001; // EPHEMERAL (NO SIGN)
 
-/* =============================
-   UTIL
-============================= */
-const log = (msg) => {
+/* =========================
+   UTIL LOG
+========================= */
+function log(msg){
   const el = document.getElementById("log");
   el.innerHTML += msg + "<br>";
   el.scrollTop = el.scrollHeight;
-};
+}
 
-/* =============================
-   CONNECT RELAY
-============================= */
-const ws = new WebSocket(RELAY_URL);
+/* =========================
+   CONNECT
+========================= */
+const ws = new WebSocket(RELAY);
 
 ws.onopen = () => {
   log("✅ Connected to relay");
-
-  // subscribe ke room
-  subscribeRoom(document.getElementById("room").value);
+  subscribe();
 };
 
 ws.onclose = () => log("❌ Disconnected");
-ws.onerror = () => log("⚠️ Relay error");
+ws.onerror = () => log("⚠️ Error relay");
 
 ws.onmessage = (e) => {
   const data = JSON.parse(e.data);
-
   if (data[0] === "EVENT") {
-    const event = data[2];
-    log("📥 EVENT: " + event.content);
+    const ev = data[2];
+    log("📥 " + ev.content);
   }
 };
 
-/* =============================
-   SUBSCRIBE ROOM
-============================= */
-function subscribeRoom(room) {
+/* =========================
+   SUBSCRIBE
+========================= */
+function subscribe(){
+  const room = document.getElementById("room").value;
   ws.send(JSON.stringify([
     "REQ",
     "sub-" + room,
     {
-      kinds: [KIND_SIGNAL],
-      "#room": [room]
+      kinds:[KIND],
+      "#room":[room]
     }
   ]));
   log("📡 Subscribe room: " + room);
 }
 
-/* =============================
+/* =========================
    SEND EVENT
-============================= */
-function sendEvent() {
+========================= */
+function sendEvent(){
   const room = document.getElementById("room").value;
   const content = document.getElementById("payload").value;
 
-  if (!content) return alert("Payload kosong");
+  if(!content) return alert("Payload kosong");
 
   const event = {
-    id: Math.random().toString(36).slice(2),   // dummy
     pubkey: "anon",
-    created_at: Math.floor(Date.now() / 1000),
-    kind: KIND_SIGNAL,
+    created_at: Math.floor(Date.now()/1000),
+    kind: KIND,
     tags: [
-      ["room", room],
-      ["type", "signal"]
+      ["room", room]
     ],
-    content: content,
-    sig: "none"
+    content: content
   };
 
   ws.send(JSON.stringify(["EVENT", event]));
-  log("📤 SEND: " + content);
+  log("📤 " + content);
 }
 </script>
 
