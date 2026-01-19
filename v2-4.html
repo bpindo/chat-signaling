@@ -1,219 +1,128 @@
 <!DOCTYPE html>
 <html lang="id">
 <head>
-<meta charset="UTF-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Adaptive Mesh Signaling via Telegram</title>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Stateless Mesh via Telegram</title>
 
 <style>
 body{font-family:monospace;background:#f4f7fb;padding:20px}
-button,textarea,input{width:100%;margin-top:8px;padding:10px}
+button,input{width:100%;margin-top:8px;padding:10px}
 pre{background:#0f172a;color:#e5e7eb;padding:10px;height:200px;overflow:auto}
 </style>
 </head>
 
 <body>
 
-<h3>🌐 Adaptive Mesh Signaling</h3>
+<h3>🧠 Stateless P2P Mesh</h3>
 
-<button onclick="createOffer()">➕ Buat Offer (Auto Kirim)</button>
+<button onclick="makeOffer()">➕ Buat Offer</button>
+<input id="msg" placeholder="Pesan">
+<button onclick="sendMsg()">Kirim</button>
 
-<textarea id="jsonLog" rows="6" readonly></textarea>
-
-<input id="messageInput" placeholder="Pesan">
-<button onclick="broadcast()">Kirim Pesan</button>
-
-<pre id="systemLog"></pre>
+<pre id="log"></pre>
 
 <script src="https://cdn.jsdelivr.net/npm/simple-peer@9/simplepeer.min.js"></script>
 <script>
-/* ================= BOT INFO ================= */
+/* ===== CONFIG ===== */
 const BOT_SEND = "8384730708:AAHjPCLYpW7wz2B5-jBxMJ17-kH1G1zXZuY";
 const BOT_READ = "359218339:AAF7KH-T3ihEPvHfWPJge_Ax9PdV9GQw2W0";
-const CHANNEL_ID = "-1003689025820";
+const CHANNEL = "-1003689025820";
+const POLL_INTERVAL = 5000;
 
-/* ================= STATE ================= */
-const myId = "peer-" + Math.random().toString(36).slice(2,8);
+/* ===== STATE LOKAL ===== */
+const id = "p-" + Math.random().toString(36).slice(2,7);
 const peers = {};
-let lastUpdateId = 0;
+let lastUpdate = 0;
 
-const seenEvents = new Map();           // eventHash -> timestamp
-const seenConnSignal = new Set();       // connId + type
+const logEl = document.getElementById("log");
+const log = m => logEl.textContent += m + "\n";
 
-const EVENT_TTL = 60000; // 60 detik
+log("ID: " + id);
 
-let pollInterval = 5000;
-let pollTimer = null;
-
-const logEl = document.getElementById("systemLog");
-const jsonLogEl = document.getElementById("jsonLog");
-const messageInput = document.getElementById("messageInput");
-
-/* ================= UTIL ================= */
-function log(m){
-  logEl.textContent += m + "\n";
-  logEl.scrollTop = logEl.scrollHeight;
-}
-
-function hashEvent(str){
-  let h=0;
-  for(let i=0;i<str.length;i++){
-    h=(h<<5)-h+str.charCodeAt(i);
-    h|=0;
-  }
-  return h.toString();
-}
-
-function getEventId(o){
-  return hashEvent(
-    o.from +
-    o.connId +
-    o.type +
-    JSON.stringify(o.signal)
-  );
-}
-
-/* ================= TELEGRAM SEND ================= */
-function sendToTelegram(obj){
+/* ===== TELEGRAM SEND ===== */
+function sendTG(obj){
   fetch(`https://api.telegram.org/bot${BOT_SEND}/sendMessage`,{
     method:"POST",
-    headers:{ "Content-Type":"application/json" },
+    headers:{'Content-Type':'application/json'},
     body:JSON.stringify({
-      chat_id: CHANNEL_ID,
+      chat_id: CHANNEL,
       text: JSON.stringify(obj)
     })
-  }).then(()=>log("📤 Sent to Telegram"));
+  });
 }
 
-/* ================= PEER ================= */
-function createOffer(){
-  const connId = "conn-" + crypto.randomUUID();
+/* ===== PEER ===== */
+function makeOffer(){
+  const cid = crypto.randomUUID();
   const p = new SimplePeer({initiator:true,trickle:false});
-  peers[connId] = p;
-  setupPeer(p,connId);
-  log("Offer dibuat " + connId);
-}
+  peers[cid] = p;
 
-function setupPeer(p,connId){
-  p.on("signal", d=>{
-    const payload = {
-      from: myId,
-      connId,
-      type: d.type,
-      signal: d,
-      ts: Date.now()
-    };
-    jsonLogEl.value = JSON.stringify(payload,null,2);
-    sendToTelegram(payload);
+  p.on("signal", s=>{
+    sendTG({t:"offer", from:id, connId:cid, signal:s});
   });
 
-  p.on("connect", ()=>{
-    log("✅ CONNECTED " + connId);
+  p.on("connect", ()=>log("✅ connected " + cid));
+  p.on("data", d=>log("💬 " + d));
+}
+
+function answerOffer(o){
+  const p = new SimplePeer({initiator:false,trickle:false});
+  peers[o.connId] = p;
+
+  p.on("signal", s=>{
+    sendTG({t:"answer", from:id, connId:o.connId, signal:s});
   });
 
-  p.on("data", d=>{
-    log("💬 " + d);
+  p.on("connect", ()=>log("✅ connected " + o.connId));
+  p.on("data", d=>log("💬 " + d));
+
+  p.signal(o.signal);
+}
+
+/* ===== POLLING ===== */
+async function poll(){
+  const r = await fetch(
+    `https://api.telegram.org/bot${BOT_READ}/getUpdates?offset=${lastUpdate+1}`
+  );
+  const j = await r.json();
+  if(!j.result) return;
+
+  j.result.forEach(u=>{
+    lastUpdate = u.update_id;
+    const m = u.channel_post || u.message;
+    if(!m?.text) return;
+
+    try{
+      const o = JSON.parse(m.text);
+      if(o.from === id) return;
+
+      if(o.t === "offer"){
+        if(!peers[o.connId]){
+          answerOffer(o);
+        }
+      }
+
+      if(o.t === "answer"){
+        const p = peers[o.connId];
+        if(p) p.signal(o.signal);
+      }
+    }catch{}
   });
 }
 
-/* ================= APPLY SIGNAL ================= */
-function applySignal(obj){
-  if(obj.from === myId) return;
-
-  const key = obj.connId + "-" + obj.type;
-  if(seenConnSignal.has(key)) return;
-
-  if(!peers[obj.connId]){
-    const p = new SimplePeer({initiator:false,trickle:false});
-    peers[obj.connId] = p;
-    setupPeer(p,obj.connId);
-    p.signal(obj.signal);
-    log("⬇️ OFFER diterima " + obj.connId);
-  }else{
-    peers[obj.connId].signal(obj.signal);
-    log("⬇️ ANSWER diterapkan " + obj.connId);
-  }
-
-  seenConnSignal.add(key);
-}
-
-/* ================= TELEGRAM POLL ================= */
-async function pollTelegram(){
-  try{
-    const r = await fetch(
-      `https://api.telegram.org/bot${BOT_READ}/getUpdates?offset=${lastUpdateId+1}`
-    );
-    const j = await r.json();
-    if(!j.result) return;
-
-    let applied = 0;
-
-    j.result.forEach(u=>{
-      lastUpdateId = u.update_id;
-      const m = u.channel_post || u.message;
-      if(!m?.text) return;
-
-      let obj;
-      try{ obj = JSON.parse(m.text); }catch{ return; }
-
-      if(!obj.connId || !obj.signal) return;
-
-      /* ===== DEDUP ===== */
-      const eid = getEventId(obj);
-      if(seenEvents.has(eid)) return;
-
-      /* ===== TTL ===== */
-      if(Date.now() - (obj.ts||0) > EVENT_TTL) return;
-
-      seenEvents.set(eid, Date.now());
-      applySignal(obj);
-      applied++;
-    });
-
-    adaptivePoll(applied);
-
-  }catch(e){
-    log("❌ Telegram error");
-  }
-}
-
-/* ================= ADAPTIVE POLLING ================= */
-function adaptivePoll(applied){
-  const nodeCount = Object.keys(peers).length || 1;
-  pollInterval = Math.min(30000, 4000 + nodeCount * 2000);
-  restartPoll();
-}
-
-function restartPoll(){
-  if(pollTimer) clearInterval(pollTimer);
-  pollTimer = setInterval(pollTelegram, pollInterval);
-}
-
-/* ================= CHAT ================= */
-function broadcast(){
-  const msg = messageInput.value;
+/* ===== CHAT ===== */
+function sendMsg(){
+  const v = msg.value;
   for(const k in peers){
-    if(peers[k].connected){
-      peers[k].send(msg);
-    }
+    if(peers[k].connected) peers[k].send(v);
   }
-  log("Kamu: " + msg);
-  messageInput.value="";
+  log("me: " + v);
+  msg.value="";
 }
 
-/* ================= GC ================= */
-setInterval(()=>{
-  const now = Date.now();
-  for(const [k,t] of seenEvents){
-    if(now - t > EVENT_TTL){
-      seenEvents.delete(k);
-    }
-  }
-},15000);
-
-/* ================= START ================= */
-log("MY ID = " + myId);
-restartPoll();
+/* ===== START ===== */
+setInterval(poll, POLL_INTERVAL);
 </script>
 
 </body>
