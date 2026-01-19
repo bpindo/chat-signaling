@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Telegram Mesh Signaling</title>
+
+<script src="https://cdn.jsdelivr.net/npm/simple-peer@9/simplepeer.min.js"></script>
+
+<style>
+body { font-family: monospace; background:#f4f7fb; padding:16px; }
+button,input,textarea { width:100%; margin:6px 0; padding:8px; }
+pre { background:#111; color:#0f0; padding:10px; height:180px; overflow:auto; }
+</style>
+</head>
+
+<body>
+
+<h3>Telegram Mesh Signaling</h3>
+
+<button onclick="createOffer()">➕ Create Offer</button>
+
+<input id="msg" placeholder="message">
+<button onclick="broadcast()">Send Message</button>
+
+<pre id="log"></pre>
+
+<script>
+/* ================= CONFIG ================= */
+const BOT_SEND = "BOT_TOKEN_SEND";
+const BOT_READ = "BOT_TOKEN_READ";
+const CHANNEL_ID = "@your_channel";
+
+/* ================= STATE ================= */
+const myId = "anom" + Math.floor(Math.random()*9999);
+const peers = {};
+const state = {};
+let lastUpdateId = 0;
+
+const logEl = document.getElementById("log");
+const log = m => logEl.textContent += m + "\n";
+
+/* ================= TELEGRAM ================= */
+async function sendEvent(event){
+  await fetch(`https://api.telegram.org/bot${BOT_SEND}/sendMessage`,{
+    method:"POST",
+    headers:{ "Content-Type":"application/json" },
+    body:JSON.stringify({
+      chat_id: CHANNEL_ID,
+      text: JSON.stringify(event)
+    })
+  });
+}
+
+async function pollEvents(){
+  const res = await fetch(
+    `https://api.telegram.org/bot${BOT_READ}/getUpdates?offset=${lastUpdateId+1}`
+  );
+  const data = await res.json();
+  if(!data.result) return;
+
+  for(const u of data.result){
+    lastUpdateId = u.update_id;
+    const msg = u.channel_post || u.message;
+    if(!msg?.text) continue;
+
+    try {
+      const evt = JSON.parse(msg.text);
+      reducer(evt);
+    } catch {}
+  }
+}
+
+/* ================= EVENT REDUCER ================= */
+function reducer(e){
+  if(e.from === myId) return;
+  if(Date.now() - e.ts > 120000) return;
+
+  const cid = e.connId;
+
+  if(e.kind === "offer"){
+    if(state[cid]) return;
+
+    log("📥 OFFER " + cid);
+    const p = new SimplePeer({ initiator:false, trickle:false });
+    setupPeer(p,cid,"receiver");
+    p.signal(e.payload.sdp);
+  }
+
+  if(e.kind === "answer"){
+    if(state[cid]?.role !== "initiator") return;
+
+    log("📥 ANSWER " + cid);
+    state[cid].peer.signal(e.payload.sdp);
+  }
+
+  if(e.kind === "close"){
+    cleanup(cid);
+  }
+}
+
+/* ================= PEER ================= */
+function setupPeer(peer, connId, role){
+  peers[connId] = peer;
+  state[connId] = { peer, role };
+
+  peer.on("signal", data=>{
+    if(data.type === "offer"){
+      sendEvent({
+        v:1, kind:"offer", from:myId, to:"*",
+        connId, ts:Date.now(), payload:{ sdp:data }
+      });
+    }
+    if(data.type === "answer"){
+      sendEvent({
+        v:1, kind:"answer", from:myId, to:"*",
+        connId, ts:Date.now(), payload:{ sdp:data }
+      });
+    }
+  });
+
+  peer.on("connect", ()=>{
+    log("✅ CONNECTED " + connId);
+  });
+
+  peer.on("data", d=>{
+    log("💬 " + d);
+  });
+
+  peer.on("close", ()=>{
+    cleanup(connId);
+  });
+}
+
+function cleanup(id){
+  if(peers[id]){
+    peers[id].destroy();
+    delete peers[id];
+    delete state[id];
+    log("🧹 CLOSED " + id);
+  }
+}
+
+/* ================= ACTIONS ================= */
+function createOffer(){
+  const connId = "conn-" + crypto.randomUUID();
+  const p = new SimplePeer({ initiator:true, trickle:false });
+  setupPeer(p, connId, "initiator");
+  log("📤 OFFER CREATED " + connId);
+}
+
+function broadcast(){
+  const t = document.getElementById("msg").value;
+  for(const id in peers){
+    if(peers[id].connected) peers[id].send(myId+": "+t);
+  }
+}
+
+/* ================= LOOP ================= */
+setInterval(pollEvents, 2000);
+
+log("🆔 myId: " + myId);
+</script>
+
+</body>
+</html>
