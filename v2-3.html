@@ -3,33 +3,48 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Telegram Mesh Signaling</title>
+<title>Telegram Mesh Signaling – DEBUG</title>
 
 <script src="https://cdn.jsdelivr.net/npm/simple-peer@9/simplepeer.min.js"></script>
 
 <style>
-body { font-family: monospace; background:#f4f7fb; padding:16px; }
-button,input,textarea { width:100%; margin:6px 0; padding:8px; }
-pre { background:#111; color:#0f0; padding:10px; height:180px; overflow:auto; }
+body {
+  font-family: monospace;
+  background:#f4f7fb;
+  padding:16px;
+}
+button,input {
+  width:100%;
+  margin:6px 0;
+  padding:8px;
+}
+pre {
+  background:#0b1020;
+  color:#9ef;
+  padding:10px;
+  height:260px;
+  overflow:auto;
+  white-space:pre-wrap;
+}
 </style>
 </head>
 
 <body>
 
-<h3>Telegram Mesh Signaling</h3>
+<h3>Telegram Mesh Signaling (DEBUG)</h3>
 
-<button onclick="createOffer()">➕ Create Offer</button>
+<button onclick="createOffer()">➕ CREATE OFFER</button>
 
 <input id="msg" placeholder="message">
-<button onclick="broadcast()">Send Message</button>
+<button onclick="broadcast()">SEND MESSAGE</button>
 
 <pre id="log"></pre>
 
 <script>
 /* ================= CONFIG ================= */
-const BOT_SEND = "BOT_TOKEN_SEND";
-const BOT_READ = "BOT_TOKEN_READ";
-const CHANNEL_ID = "@your_channel";
+const BOT_SEND = "8384730708:AAHjPCLYpW7wz2B5-jBxMJ17-kH1G1zXZuY";
+const BOT_READ = "359218339:AAF7KH-T3ihEPvHfWPJge_Ax9PdV9GQw2W0";
+const CHANNEL_ID = "-1003689025820";
 
 /* ================= STATE ================= */
 const myId = "anom" + Math.floor(Math.random()*9999);
@@ -37,41 +52,61 @@ const peers = {};
 const state = {};
 let lastUpdateId = 0;
 
+/* ================= UI ================= */
 const logEl = document.getElementById("log");
-const log = m => logEl.textContent += m + "\n";
+function log(m){
+  logEl.textContent += `[${new Date().toLocaleTimeString()}] ${m}\n`;
+  logEl.scrollTop = logEl.scrollHeight;
+}
+
+log("🆔 myId = " + myId);
 
 /* ================= TELEGRAM ================= */
 async function sendEvent(event){
-  await fetch(`https://api.telegram.org/bot${BOT_SEND}/sendMessage`,{
-    method:"POST",
-    headers:{ "Content-Type":"application/json" },
-    body:JSON.stringify({
-      chat_id: CHANNEL_ID,
-      text: JSON.stringify(event)
-    })
-  });
-}
-
-async function pollEvents(){
-  const res = await fetch(
-    `https://api.telegram.org/bot${BOT_READ}/getUpdates?offset=${lastUpdateId+1}`
-  );
-  const data = await res.json();
-  if(!data.result) return;
-
-  for(const u of data.result){
-    lastUpdateId = u.update_id;
-    const msg = u.channel_post || u.message;
-    if(!msg?.text) continue;
-
-    try {
-      const evt = JSON.parse(msg.text);
-      reducer(evt);
-    } catch {}
+  log("📤 SEND → TELEGRAM: " + event.kind + " " + event.connId);
+  try {
+    const res = await fetch(
+      `https://api.telegram.org/bot${BOT_SEND}/sendMessage`,
+      {
+        method:"POST",
+        headers:{ "Content-Type":"application/json" },
+        body:JSON.stringify({
+          chat_id: CHANNEL_ID,
+          text: JSON.stringify(event)
+        })
+      }
+    );
+    const j = await res.json();
+    log("📨 TELEGRAM RESP: " + JSON.stringify(j));
+  } catch(e){
+    log("❌ TELEGRAM ERROR: " + e.message);
   }
 }
 
-/* ================= EVENT REDUCER ================= */
+async function pollEvents(){
+  try {
+    const res = await fetch(
+      `https://api.telegram.org/bot${BOT_READ}/getUpdates?offset=${lastUpdateId+1}`
+    );
+    const data = await res.json();
+    if(!data.result) return;
+
+    for(const u of data.result){
+      lastUpdateId = u.update_id;
+      const msg = u.channel_post || u.message;
+      if(!msg?.text) continue;
+
+      try {
+        const evt = JSON.parse(msg.text);
+        reducer(evt);
+      } catch {}
+    }
+  } catch(e){
+    log("❌ POLL ERROR: " + e.message);
+  }
+}
+
+/* ================= REDUCER ================= */
 function reducer(e){
   if(e.from === myId) return;
   if(Date.now() - e.ts > 120000) return;
@@ -81,21 +116,17 @@ function reducer(e){
   if(e.kind === "offer"){
     if(state[cid]) return;
 
-    log("📥 OFFER " + cid);
+    log("📥 OFFER IN " + cid);
     const p = new SimplePeer({ initiator:false, trickle:false });
-    setupPeer(p,cid,"receiver");
+    setupPeer(p, cid, "receiver");
     p.signal(e.payload.sdp);
   }
 
   if(e.kind === "answer"){
     if(state[cid]?.role !== "initiator") return;
 
-    log("📥 ANSWER " + cid);
+    log("📥 ANSWER IN " + cid);
     state[cid].peer.signal(e.payload.sdp);
-  }
-
-  if(e.kind === "close"){
-    cleanup(cid);
   }
 }
 
@@ -105,18 +136,17 @@ function setupPeer(peer, connId, role){
   state[connId] = { peer, role };
 
   peer.on("signal", data=>{
-    if(data.type === "offer"){
-      sendEvent({
-        v:1, kind:"offer", from:myId, to:"*",
-        connId, ts:Date.now(), payload:{ sdp:data }
-      });
-    }
-    if(data.type === "answer"){
-      sendEvent({
-        v:1, kind:"answer", from:myId, to:"*",
-        connId, ts:Date.now(), payload:{ sdp:data }
-      });
-    }
+    log("📡 SIGNAL GENERATED: " + data.type + " (" + connId + ")");
+
+    sendEvent({
+      v:1,
+      kind: data.type,
+      from: myId,
+      to: "*",
+      connId,
+      ts: Date.now(),
+      payload: { sdp: data }
+    });
   });
 
   peer.on("connect", ()=>{
@@ -124,11 +154,16 @@ function setupPeer(peer, connId, role){
   });
 
   peer.on("data", d=>{
-    log("💬 " + d);
+    log("💬 DATA: " + d);
   });
 
   peer.on("close", ()=>{
+    log("⚠️ CLOSED " + connId);
     cleanup(connId);
+  });
+
+  peer.on("error", e=>{
+    log("❌ PEER ERROR ("+connId+"): " + e.message);
   });
 }
 
@@ -137,29 +172,38 @@ function cleanup(id){
     peers[id].destroy();
     delete peers[id];
     delete state[id];
-    log("🧹 CLOSED " + id);
   }
 }
 
-/* ================= ACTIONS ================= */
+/* ================= ACTION ================= */
 function createOffer(){
   const connId = "conn-" + crypto.randomUUID();
-  const p = new SimplePeer({ initiator:true, trickle:false });
+  log("⏳ CREATE OFFER " + connId);
+
+  const p = new SimplePeer({
+    initiator:true,
+    trickle:false
+  });
+
   setupPeer(p, connId, "initiator");
-  log("📤 OFFER CREATED " + connId);
+
+  // penting untuk iOS / mobile
+  setTimeout(()=>{
+    log("⌛ waiting signal…");
+  }, 0);
 }
 
 function broadcast(){
   const t = document.getElementById("msg").value;
   for(const id in peers){
-    if(peers[id].connected) peers[id].send(myId+": "+t);
+    if(peers[id].connected){
+      peers[id].send(myId + ": " + t);
+    }
   }
 }
 
 /* ================= LOOP ================= */
 setInterval(pollEvents, 2000);
-
-log("🆔 myId: " + myId);
 </script>
 
 </body>
