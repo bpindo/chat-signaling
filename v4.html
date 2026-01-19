@@ -1,202 +1,171 @@
 <!DOCTYPE html>
 <html lang="id">
 <head>
-<meta charset="UTF-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Mesh Signaling Hive (Adaptive)</title>
-
-<script src="https://cdn.jsdelivr.net/npm/simple-peer@9/simplepeer.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/@hiveio/hive-js/dist/hive.min.js"></script>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Stateless P2P Mesh (Auto Join)</title>
 
 <style>
-body{font-family:system-ui;background:#f4f7fb;padding:12px}
-pre,textarea{width:100%;min-height:120px;font-family:monospace}
-button{padding:8px;margin:4px}
+body{font-family:monospace;background:#f4f7fb;padding:20px}
+input,button{width:100%;margin-top:8px;padding:10px}
+pre{background:#0f172a;color:#e5e7eb;padding:10px;height:220px;overflow:auto}
 </style>
 </head>
+
 <body>
 
-<h3>Mesh Signaling Hive (Adaptive Polling)</h3>
-<button onclick="createOffer()">Buat Offer</button>
-<input id="msg" placeholder="pesan"/>
-<button onclick="broadcast()">Kirim</button>
+<h3>🌐 Stateless P2P Mesh</h3>
+
+<input id="msg" placeholder="Pesan">
+<button onclick="sendMsg()">Kirim</button>
 
 <pre id="log"></pre>
 
+<script src="https://cdn.jsdelivr.net/npm/simple-peer@9/simplepeer.min.js"></script>
 <script>
-/* ================= HIVE ================= */
-const HIVE = {
-  user: "bagasadi",
-  key: "ISI_KEY_SENDIRI",
-  parentAuthor: "rewar.app",
-  parentPermlink: "are-you-ready",
-  commentPermlink: "comment-1768732863127"
+/* ===== CONFIG ===== */
+const BOT_SEND = "8384730708:AAHjPCLYpW7wz2B5-jBxMJ17-kH1G1zXZuY";
+const BOT_READ = "359218339:AAF7KH-T3ihEPvHfWPJge_Ax9PdV9GQw2W0";
+const CHANNEL  = "-1003689025820";
+
+const POLL_INTERVAL = 5000;
+const MAX_PEERS = 5;
+
+/* ===== STATE LOKAL ===== */
+const id = "p-" + Math.random().toString(36).slice(2,7);
+const peers = {};          // connId -> SimplePeer
+let lastUpdate = 0;
+
+const logEl = document.getElementById("log");
+const log = m => {
+  logEl.textContent += m + "\n";
+  logEl.scrollTop = logEl.scrollHeight;
 };
 
-hive.api.setOptions({ url:"https://api.hive.blog" });
-hive.api.getConfig((e,r)=>!e&&hive.config.set("chain_id",r.HIVE_CHAIN_ID));
+log("ID: " + id);
 
-hive.api.getContentAsync=(a,p)=>new Promise((res,rej)=>{
-  hive.api.getContent(a,p,(e,r)=>e?rej(e):res(r))
-});
-
-/* ================= STATE ================= */
-const myId = "node-"+Math.random().toString(36).slice(2,7);
-const peers = {};
-const directPeers = new Set();
-const knownPeers = new Set([myId]);
-const meshLinks = new Map();
-const seenEvents = new Set();
-
-let pollTimer = null;
-
-/* ================= LOG ================= */
-const logEl=document.getElementById("log");
-const log=t=>{logEl.textContent+=t+"\n";logEl.scrollTop=99999};
-
-/* ================= MESH EVENT ================= */
-function meshEvent(evt,peer){
-  const ev={
-    type:"mesh-event",
-    evt,
-    id:`evt-${myId}-${Date.now()}`,
-    from:myId,
-    peer,
-    ts:Date.now(),
-    hops:0,
-    ttl:3
-  };
-  seenEvents.add(ev.id);
-  broadcastRaw(ev);
+/* ===== UTIL ===== */
+function peerCount(){
+  return Object.values(peers).filter(p => p.connected).length;
 }
 
-function handleMeshEvent(ev){
-  if(seenEvents.has(ev.id)) return;
-  if(ev.hops>=ev.ttl) return;
-
-  seenEvents.add(ev.id);
-  knownPeers.add(ev.from);
-  if(ev.peer) knownPeers.add(ev.peer);
-
-  if(ev.evt==="mesh:connect"){
-    meshLinks.set(`${ev.from}-${ev.peer}`,Date.now());
-  }
-
-  ev.hops++;
-  broadcastRaw(ev);
-}
-
-/* ================= POLLING ================= */
-function computeHiveInterval(){
-  const n = directPeers.size;
-  if(n<=1) return 5000;
-  if(n===2) return 30000;
-  if(n===3) return 60000;
-  return 120000;
-}
-
-function restartPolling(){
-  if(pollTimer) clearTimeout(pollTimer);
-  const interval = computeHiveInterval();
-  log(`⏱️ Poll Hive tiap ${interval/1000}s`);
-  pollTimer=setTimeout(async ()=>{
-    await checkHive();
-    restartPolling();
-  },interval);
-}
-
-/* ================= PEER ================= */
-function setupPeer(p,id){
-  p.on("connect",()=>{
-    directPeers.add(id);
-    log(`✅ CONNECT ${id}`);
-    meshEvent("mesh:connect",id);
-    restartPolling();
-  });
-
-  p.on("close",()=>{
-    directPeers.delete(id);
-    delete peers[id];
-    log(`❌ CLOSE ${id}`);
-    restartPolling();
-  });
-
-  p.on("data",d=>{
-    const m=JSON.parse(d);
-    if(m.type==="mesh-event") handleMeshEvent(m);
-    else log(`💬 ${m.from}: ${m.text}`);
+/* ===== TELEGRAM SEND ===== */
+function sendTG(obj){
+  fetch(`https://api.telegram.org/bot${BOT_SEND}/sendMessage`,{
+    method:"POST",
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({
+      chat_id: CHANNEL,
+      text: JSON.stringify(obj)
+    })
   });
 }
 
-/* ================= OFFER ================= */
-function createOffer(){
-  const id="conn-"+crypto.randomUUID();
-  const p=new SimplePeer({initiator:true,trickle:false});
-  peers[id]=p;
-  setupPeer(p,id);
+/* ===== HELLO ===== */
+function sendHello(){
+  if(peerCount() >= MAX_PEERS) return;
+  sendTG({ t:"hello", from:id });
+  log("👋 hello sent");
+}
 
-  p.on("signal",sig=>{
-    sendSignal({from:myId,connId:id,type:sig.type,signal:sig});
+/* ===== PEER ===== */
+function makeOffer(){
+  if(peerCount() >= MAX_PEERS) return;
+
+  const cid = crypto.randomUUID();
+  const p = new SimplePeer({initiator:true,trickle:false});
+  peers[cid] = p;
+
+  p.on("signal", s=>{
+    sendTG({ t:"offer", from:id, connId:cid, signal:s });
+  });
+
+  p.on("connect", ()=>{
+    log("✅ connected " + cid);
+  });
+
+  p.on("data", d=>{
+    log("💬 " + d);
   });
 }
 
-/* ================= SIGNALING ================= */
-async function sendSignal(sig){
-  const c=await hive.api.getContentAsync(HIVE.user,HIVE.commentPermlink);
-  let arr=[];
-  try{arr=JSON.parse(c.body)||[]}catch{}
-  arr.push(sig);
+function answerOffer(o){
+  if(peerCount() >= MAX_PEERS) return;
 
-  hive.broadcast.comment(
-    HIVE.key,
-    HIVE.parentAuthor,
-    HIVE.parentPermlink,
-    HIVE.user,
-    HIVE.commentPermlink,
-    "",
-    JSON.stringify(arr),
-    "{}",
-    ()=>log("📡 Signal ke Hive")
+  const p = new SimplePeer({initiator:false,trickle:false});
+  peers[o.connId] = p;
+
+  p.on("signal", s=>{
+    sendTG({ t:"answer", from:id, connId:o.connId, signal:s });
+  });
+
+  p.on("connect", ()=>{
+    log("✅ connected " + o.connId);
+  });
+
+  p.on("data", d=>{
+    log("💬 " + d);
+  });
+
+  p.signal(o.signal);
+}
+
+/* ===== POLLING ===== */
+async function poll(){
+  const r = await fetch(
+    `https://api.telegram.org/bot${BOT_READ}/getUpdates?offset=${lastUpdate+1}`
   );
+  const j = await r.json();
+  if(!j.result) return;
+
+  j.result.forEach(u=>{
+    lastUpdate = u.update_id;
+    const m = u.channel_post || u.message;
+    if(!m?.text) return;
+
+    try{
+      const o = JSON.parse(m.text);
+      if(o.from === id) return;
+
+      /* HELLO = pancing OFFER */
+      if(o.t === "hello"){
+        if(peerCount() < MAX_PEERS){
+          makeOffer();
+        }
+      }
+
+      /* OFFER */
+      if(o.t === "offer"){
+        if(!peers[o.connId] && peerCount() < MAX_PEERS){
+          answerOffer(o);
+        }
+      }
+
+      /* ANSWER */
+      if(o.t === "answer"){
+        const p = peers[o.connId];
+        if(p) p.signal(o.signal);
+      }
+    }catch{}
+  });
 }
 
-async function checkHive(){
-  log("🔍 cek Hive");
-  const c=await hive.api.getContentAsync(HIVE.user,HIVE.commentPermlink);
-  let arr=[];
-  try{arr=JSON.parse(c.body)||[]}catch{}
-  arr.forEach(s=>{
-    if(s.from===myId) return;
-    if(!peers[s.connId]&&s.type==="offer"){
-      const p=new SimplePeer({initiator:false,trickle:false});
-      peers[s.connId]=p;
-      setupPeer(p,s.connId);
-      p.signal(s.signal);
-    }else if(peers[s.connId]){
-      peers[s.connId].signal(s.signal);
+/* ===== CHAT ===== */
+function sendMsg(){
+  const v = msg.value;
+  for(const k in peers){
+    if(peers[k].connected){
+      peers[k].send(v);
     }
-  });
+  }
+  log("me: " + v);
+  msg.value="";
 }
 
-/* ================= CHAT ================= */
-function broadcast(){
-  const t=document.getElementById("msg").value;
-  Object.values(peers).forEach(p=>{
-    if(p.connected)p.send(JSON.stringify({from:myId,text:t}));
-  });
-  log(`🗨️ kamu: ${t}`);
-}
-
-/* ================= RAW SEND ================= */
-function broadcastRaw(obj){
-  Object.values(peers).forEach(p=>{
-    if(p.connected)p.send(JSON.stringify(obj));
-  });
-}
-
-/* ================= START ================= */
-log("🟢 node "+myId+" start");
-restartPolling();
+/* ===== START ===== */
+sendHello();                       // user baru langsung announce
+setInterval(sendHello, 20000);     // user lama sesekali buka pintu
+setInterval(poll, POLL_INTERVAL);  // polling bodoh tapi stabil
 </script>
 
 </body>
