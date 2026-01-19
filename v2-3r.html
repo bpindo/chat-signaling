@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Multi-Peer Mesh Signaling + Telegram</title>
+
+<style>
+:root{
+  --bg:#f4f7fb;--card:#fff;--border:#d0d7e2;
+  --primary:#2563eb;--text:#1f2937;
+}
+body{
+  font-family:system-ui,monospace;
+  background:var(--bg);
+  color:var(--text);
+  padding:20px;
+  max-width:760px;
+  margin:auto;
+}
+.peer-section{
+  background:var(--card);
+  border:1px solid var(--border);
+  border-radius:10px;
+  padding:20px;
+  margin-bottom:20px;
+}
+textarea,input,button{
+  width:100%;
+  margin-top:8px;
+  padding:12px;
+  font-family:monospace;
+}
+button{
+  background:var(--primary);
+  color:#fff;
+  border:none;
+  border-radius:8px;
+  cursor:pointer;
+}
+pre{background:#eee;padding:10px;height:150px;overflow:auto}
+#systemLog{background:#0f172a;color:#e5e7eb}
+</style>
+</head>
+
+<body>
+
+<h2>🌐 Multi-Peer Mesh Manual Signaling</h2>
+
+<div class="peer-section">
+<strong>1️⃣ Buat Offer</strong>
+<button onclick="createOffer()">Buat Offer</button>
+</div>
+
+<div class="peer-section">
+<strong>2️⃣ Apply Signaling</strong>
+<textarea id="signalInput" placeholder="Paste JSON di sini"></textarea>
+<button onclick="applySignal()">Apply</button>
+</div>
+
+<div class="peer-section">
+<strong>📦 JSON Signaling</strong>
+<textarea id="jsonLog" rows="6" readonly></textarea>
+<button onclick="copyJSON()">Copy JSON</button>
+<button onclick="sendJsonToTelegram()">📤 Kirim ke Telegram</button>
+<button onclick="fetchFromTelegram()">📥 Ambil dari Telegram</button>
+</div>
+
+<div class="peer-section">
+<strong>💬 Broadcast</strong>
+<input id="messageInput" placeholder="Pesan">
+<button onclick="broadcast()">Kirim</button>
+</div>
+
+<div class="peer-section">
+<strong>📡 System Log</strong>
+<pre id="systemLog"></pre>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/simple-peer@9/simplepeer.min.js"></script>
+<script>
+/* ================= BOT INFO ================= */
+const BOT_SEND = "8384730708:AAHjPCLYpW7wz2B5-jBxMJ17-kH1G1zXZuY";
+const BOT_READ = "359218339:AAF7KH-T3ihEPvHfWPJge_Ax9PdV9GQw2W0";
+const CHANNEL_ID = "-1003689025820";
+
+/* ================= STATE ================= */
+const myId = "peer-" + Math.random().toString(36).slice(2,8);
+const peers = {};
+let lastUpdateId = 0;
+
+const jsonLogEl = document.getElementById("jsonLog");
+const signalInput = document.getElementById("signalInput");
+const systemLogEl = document.getElementById("systemLog");
+const messageInput = document.getElementById("messageInput");
+
+function log(m){
+  systemLogEl.textContent += m + "\n";
+  systemLogEl.scrollTop = systemLogEl.scrollHeight;
+}
+
+/* ================= PEER ================= */
+function createOffer(){
+  const connId = "conn-" + crypto.randomUUID();
+  const p = new SimplePeer({initiator:true,trickle:false});
+  peers[connId] = p;
+  setupPeer(p,connId);
+  log("Offer dibuat " + connId);
+}
+
+function setupPeer(p,connId){
+  p.on("signal",d=>{
+    const payload={from:myId,connId,type:d.type,signal:d};
+    jsonLogEl.value = JSON.stringify(payload,null,2);
+    log("Signal dibuat " + d.type);
+  });
+  p.on("connect",()=>log("Connected " + connId));
+  p.on("data",d=>log("DATA: " + d));
+}
+
+function applySignal(){
+  const obj = JSON.parse(signalInput.value);
+  if(!peers[obj.connId]){
+    const p = new SimplePeer({initiator:false,trickle:false});
+    peers[obj.connId] = p;
+    setupPeer(p,obj.connId);
+    p.signal(obj.signal);
+  }else{
+    peers[obj.connId].signal(obj.signal);
+  }
+  signalInput.value="";
+}
+
+/* ================= TELEGRAM SEND ================= */
+function sendJsonToTelegram(){
+  if(!jsonLogEl.value) return alert("JSON kosong");
+  fetch(`https://api.telegram.org/bot${BOT_SEND}/sendMessage`,{
+    method:"POST",
+    headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({
+      chat_id:CHANNEL_ID,
+      text:jsonLogEl.value
+    })
+  }).then(()=>log("JSON dikirim ke Telegram"));
+}
+
+/* ================= TELEGRAM READ ================= */
+async function fetchFromTelegram(){
+  log("Ambil update Telegram...");
+  const r = await fetch(
+    `https://api.telegram.org/bot${BOT_READ}/getUpdates?offset=${lastUpdateId+1}`
+  );
+  const j = await r.json();
+  if(!j.result.length){
+    log("Tidak ada update baru");
+    return;
+  }
+  j.result.forEach(u=>{
+    lastUpdateId = u.update_id;
+    const m = u.channel_post || u.message;
+    if(m && m.text){
+      log("TG: " + m.text);
+      try{
+        const obj = JSON.parse(m.text);
+        signalInput.value = m.text;
+      }catch{}
+    }
+  });
+}
+
+/* ================= UTIL ================= */
+function copyJSON(){
+  navigator.clipboard.writeText(jsonLogEl.value);
+  log("JSON disalin");
+}
+
+function broadcast(){
+  const msg = messageInput.value;
+  for(const k in peers){
+    if(peers[k].connected){
+      peers[k].send(msg);
+    }
+  }
+  log("Kamu: " + msg);
+  messageInput.value="";
+}
+</script>
+
+</body>
+</html>
