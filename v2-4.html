@@ -1,44 +1,31 @@
 <!DOCTYPE html>
 <html lang="id">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Telegram Mesh Signaling – Optimized</title>
-
-<script src="https://cdn.jsdelivr.net/npm/simple-peer@9/simplepeer.min.js"></script>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Adaptive Mesh Signaling via Telegram</title>
 
 <style>
-body{
-  font-family:monospace;
-  background:#f4f7fb;
-  padding:16px;
-}
-button,input{
-  width:100%;
-  padding:10px;
-  margin:6px 0;
-}
-pre{
-  background:#0f172a;
-  color:#9ef;
-  padding:10px;
-  height:220px;
-  overflow:auto;
-}
+body{font-family:monospace;background:#f4f7fb;padding:20px}
+button,textarea,input{width:100%;margin-top:8px;padding:10px}
+pre{background:#0f172a;color:#e5e7eb;padding:10px;height:200px;overflow:auto}
 </style>
 </head>
 
 <body>
 
-<h3>🌐 Telegram Mesh – Optimized v1</h3>
+<h3>🌐 Adaptive Mesh Signaling</h3>
 
-<button onclick="createOffer()">➕ BUAT OFFER (AUTO SEND)</button>
+<button onclick="createOffer()">➕ Buat Offer (Auto Kirim)</button>
 
-<input id="msg" placeholder="Pesan">
-<button onclick="broadcast()">📤 KIRIM PESAN</button>
+<textarea id="jsonLog" rows="6" readonly></textarea>
 
-<pre id="log"></pre>
+<input id="messageInput" placeholder="Pesan">
+<button onclick="broadcast()">Kirim Pesan</button>
 
+<pre id="systemLog"></pre>
+
+<script src="https://cdn.jsdelivr.net/npm/simple-peer@9/simplepeer.min.js"></script>
 <script>
 /* ================= BOT INFO ================= */
 const BOT_SEND = "8384730708:AAHjPCLYpW7wz2B5-jBxMJ17-kH1G1zXZuY";
@@ -48,30 +35,109 @@ const CHANNEL_ID = "-1003689025820";
 /* ================= STATE ================= */
 const myId = "peer-" + Math.random().toString(36).slice(2,8);
 const peers = {};
-const state = {};
 let lastUpdateId = 0;
-const seenSignals = new Set();
 
-/* ================= UI ================= */
-const logEl = document.getElementById("log");
+const seenEvents = new Map();           // eventHash -> timestamp
+const seenConnSignal = new Set();       // connId + type
+
+const EVENT_TTL = 60000; // 60 detik
+
+let pollInterval = 5000;
+let pollTimer = null;
+
+const logEl = document.getElementById("systemLog");
+const jsonLogEl = document.getElementById("jsonLog");
+const messageInput = document.getElementById("messageInput");
+
+/* ================= UTIL ================= */
 function log(m){
-  logEl.textContent += `[${new Date().toLocaleTimeString()}] ${m}\n`;
+  logEl.textContent += m + "\n";
   logEl.scrollTop = logEl.scrollHeight;
 }
-log("🆔 myId = " + myId);
 
-/* ================= TELEGRAM ================= */
-async function sendToTelegram(obj){
-  await fetch(`https://api.telegram.org/bot${BOT_SEND}/sendMessage`,{
+function hashEvent(str){
+  let h=0;
+  for(let i=0;i<str.length;i++){
+    h=(h<<5)-h+str.charCodeAt(i);
+    h|=0;
+  }
+  return h.toString();
+}
+
+function getEventId(o){
+  return hashEvent(
+    o.from +
+    o.connId +
+    o.type +
+    JSON.stringify(o.signal)
+  );
+}
+
+/* ================= TELEGRAM SEND ================= */
+function sendToTelegram(obj){
+  fetch(`https://api.telegram.org/bot${BOT_SEND}/sendMessage`,{
     method:"POST",
     headers:{ "Content-Type":"application/json" },
     body:JSON.stringify({
       chat_id: CHANNEL_ID,
       text: JSON.stringify(obj)
     })
+  }).then(()=>log("📤 Sent to Telegram"));
+}
+
+/* ================= PEER ================= */
+function createOffer(){
+  const connId = "conn-" + crypto.randomUUID();
+  const p = new SimplePeer({initiator:true,trickle:false});
+  peers[connId] = p;
+  setupPeer(p,connId);
+  log("Offer dibuat " + connId);
+}
+
+function setupPeer(p,connId){
+  p.on("signal", d=>{
+    const payload = {
+      from: myId,
+      connId,
+      type: d.type,
+      signal: d,
+      ts: Date.now()
+    };
+    jsonLogEl.value = JSON.stringify(payload,null,2);
+    sendToTelegram(payload);
+  });
+
+  p.on("connect", ()=>{
+    log("✅ CONNECTED " + connId);
+  });
+
+  p.on("data", d=>{
+    log("💬 " + d);
   });
 }
 
+/* ================= APPLY SIGNAL ================= */
+function applySignal(obj){
+  if(obj.from === myId) return;
+
+  const key = obj.connId + "-" + obj.type;
+  if(seenConnSignal.has(key)) return;
+
+  if(!peers[obj.connId]){
+    const p = new SimplePeer({initiator:false,trickle:false});
+    peers[obj.connId] = p;
+    setupPeer(p,obj.connId);
+    p.signal(obj.signal);
+    log("⬇️ OFFER diterima " + obj.connId);
+  }else{
+    peers[obj.connId].signal(obj.signal);
+    log("⬇️ ANSWER diterapkan " + obj.connId);
+  }
+
+  seenConnSignal.add(key);
+}
+
+/* ================= TELEGRAM POLL ================= */
 async function pollTelegram(){
   try{
     const r = await fetch(
@@ -80,122 +146,74 @@ async function pollTelegram(){
     const j = await r.json();
     if(!j.result) return;
 
-    for(const u of j.result){
+    let applied = 0;
+
+    j.result.forEach(u=>{
       lastUpdateId = u.update_id;
       const m = u.channel_post || u.message;
-      if(!m?.text) continue;
+      if(!m?.text) return;
 
-      /* FILTER KETAT */
-      if(!m.text.startsWith("{")) continue;
-      if(!m.text.includes('"signal"')) continue;
+      let obj;
+      try{ obj = JSON.parse(m.text); }catch{ return; }
 
-      if(seenSignals.has(m.text)) continue;
-      seenSignals.add(m.text);
-      if(seenSignals.size > 200) seenSignals.clear();
+      if(!obj.connId || !obj.signal) return;
 
-      const e = JSON.parse(m.text);
-      handleEvent(e);
-    }
+      /* ===== DEDUP ===== */
+      const eid = getEventId(obj);
+      if(seenEvents.has(eid)) return;
+
+      /* ===== TTL ===== */
+      if(Date.now() - (obj.ts||0) > EVENT_TTL) return;
+
+      seenEvents.set(eid, Date.now());
+      applySignal(obj);
+      applied++;
+    });
+
+    adaptivePoll(applied);
+
   }catch(e){
-    log("❌ POLL ERR " + e.message);
+    log("❌ Telegram error");
   }
 }
 
-/* ================= CORE LOGIC ================= */
-function handleEvent(e){
-  if(e.from === myId) return;
-  if(Date.now() - e.ts > 120000) return;
-
-  const cid = e.connId;
-
-  if(e.kind === "offer"){
-    if(state[cid]) return;
-    if(e.claimedBy && e.claimedBy !== myId) return;
-
-    log("📥 OFFER " + cid);
-
-    const p = new SimplePeer({initiator:false,trickle:false});
-    setupPeer(p,cid,"receiver");
-    p.signal(e.payload.sdp);
-
-    /* CLAIM OFFER */
-    sendToTelegram({
-      ...e,
-      claimedBy: myId
-    });
-  }
-
-  if(e.kind === "answer"){
-    if(state[cid]?.role !== "initiator") return;
-    log("📥 ANSWER " + cid);
-    state[cid].peer.signal(e.payload.sdp);
-  }
+/* ================= ADAPTIVE POLLING ================= */
+function adaptivePoll(applied){
+  const nodeCount = Object.keys(peers).length || 1;
+  pollInterval = Math.min(30000, 4000 + nodeCount * 2000);
+  restartPoll();
 }
 
-/* ================= PEER ================= */
-function setupPeer(peer,connId,role){
-  peers[connId] = peer;
-  state[connId] = { peer, role };
-
-  peer.on("signal",data=>{
-    sendToTelegram({
-      v:1,
-      kind:data.type,
-      from:myId,
-      connId,
-      ts:Date.now(),
-      payload:{ sdp:data }
-    });
-    log("📡 SIGNAL " + data.type + " " + connId);
-  });
-
-  peer.on("connect",()=>{
-    log("✅ CONNECTED " + connId);
-  });
-
-  peer.on("data",d=>{
-    log("💬 " + d);
-  });
-
-  peer.on("close",()=>{
-    cleanup(connId);
-  });
+function restartPoll(){
+  if(pollTimer) clearInterval(pollTimer);
+  pollTimer = setInterval(pollTelegram, pollInterval);
 }
 
-function cleanup(id){
-  if(peers[id]){
-    peers[id].destroy();
-    delete peers[id];
-    delete state[id];
-  }
-}
-
-/* ================= ACTION ================= */
-function createOffer(){
-  const connId = "conn-" + crypto.randomUUID();
-  const p = new SimplePeer({initiator:true,trickle:false});
-  setupPeer(p,connId,"initiator");
-  log("⏳ CREATE OFFER " + connId);
-}
-
+/* ================= CHAT ================= */
 function broadcast(){
-  const t = document.getElementById("msg").value;
-  for(const id in peers){
-    if(peers[id].connected){
-      peers[id].send(myId + ": " + t);
+  const msg = messageInput.value;
+  for(const k in peers){
+    if(peers[k].connected){
+      peers[k].send(msg);
     }
   }
+  log("Kamu: " + msg);
+  messageInput.value="";
 }
 
-/* ================= POLLING ================= */
-function pollInterval(){
-  return Object.keys(peers).length === 0 ? 2500 : 15000;
-}
+/* ================= GC ================= */
+setInterval(()=>{
+  const now = Date.now();
+  for(const [k,t] of seenEvents){
+    if(now - t > EVENT_TTL){
+      seenEvents.delete(k);
+    }
+  }
+},15000);
 
-(function loop(){
-  pollTelegram();
-  setTimeout(loop, pollInterval());
-})();
+/* ================= START ================= */
+log("MY ID = " + myId);
+restartPoll();
 </script>
 
 </body>
