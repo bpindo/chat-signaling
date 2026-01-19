@@ -3,18 +3,39 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Stateless P2P Mesh (Auto Join)</title>
+<title>Stable Stateless Mesh via Telegram</title>
 
 <style>
-body{font-family:monospace;background:#f4f7fb;padding:20px}
-input,button{width:100%;margin-top:8px;padding:10px}
-pre{background:#0f172a;color:#e5e7eb;padding:10px;height:220px;overflow:auto}
+body{
+  font-family:system-ui,monospace;
+  background:#f4f7fb;
+  padding:20px;
+  max-width:600px;
+  margin:auto
+}
+h3{margin-bottom:10px}
+input,button{
+  width:100%;
+  padding:12px;
+  margin-top:8px;
+  font-family:monospace
+}
+pre{
+  background:#0f172a;
+  color:#e5e7eb;
+  padding:10px;
+  height:220px;
+  overflow:auto;
+  border-radius:8px
+}
+small{color:#555}
 </style>
 </head>
 
 <body>
 
-<h3>🌐 Stateless P2P Mesh</h3>
+<h3>🌐 Stable Stateless P2P Mesh</h3>
+<small>Auto connect · No coordination · Telegram bootstrap only</small>
 
 <input id="msg" placeholder="Pesan">
 <button onclick="sendMsg()">Kirim</button>
@@ -26,15 +47,16 @@ pre{background:#0f172a;color:#e5e7eb;padding:10px;height:220px;overflow:auto}
 /* ===== CONFIG ===== */
 const BOT_SEND = "8384730708:AAHjPCLYpW7wz2B5-jBxMJ17-kH1G1zXZuY";
 const BOT_READ = "359218339:AAF7KH-T3ihEPvHfWPJge_Ax9PdV9GQw2W0";
-const CHANNEL  = "-1003689025820";
+const CHANNEL = "-1003689025820";
 
 const POLL_INTERVAL = 5000;
 const MAX_PEERS = 5;
 
 /* ===== STATE LOKAL ===== */
 const id = "p-" + Math.random().toString(36).slice(2,7);
-const peers = {};          // connId -> SimplePeer
+const peers = {};
 let lastUpdate = 0;
+let helloSent = false;
 
 const logEl = document.getElementById("log");
 const log = m => {
@@ -45,9 +67,8 @@ const log = m => {
 log("ID: " + id);
 
 /* ===== UTIL ===== */
-function peerCount(){
-  return Object.values(peers).filter(p => p.connected).length;
-}
+const peerCount = () =>
+  Object.values(peers).filter(p=>p.connected).length;
 
 /* ===== TELEGRAM SEND ===== */
 function sendTG(obj){
@@ -61,15 +82,18 @@ function sendTG(obj){
   });
 }
 
-/* ===== HELLO ===== */
-function sendHello(){
+/* ===== HELLO (ONE SHOT) ===== */
+function maybeHello(){
+  if(helloSent) return;
   if(peerCount() >= MAX_PEERS) return;
+
+  helloSent = true;
   sendTG({ t:"hello", from:id });
   log("👋 hello sent");
 }
 
 /* ===== PEER ===== */
-function makeOffer(){
+function createOffer(target){
   if(peerCount() >= MAX_PEERS) return;
 
   const cid = crypto.randomUUID();
@@ -77,16 +101,16 @@ function makeOffer(){
   peers[cid] = p;
 
   p.on("signal", s=>{
-    sendTG({ t:"offer", from:id, connId:cid, signal:s });
+    sendTG({
+      t:"offer",
+      from:id,
+      to:target,
+      connId:cid,
+      signal:s
+    });
   });
 
-  p.on("connect", ()=>{
-    log("✅ connected " + cid);
-  });
-
-  p.on("data", d=>{
-    log("💬 " + d);
-  });
+  attachPeer(p,cid);
 }
 
 function answerOffer(o){
@@ -96,58 +120,78 @@ function answerOffer(o){
   peers[o.connId] = p;
 
   p.on("signal", s=>{
-    sendTG({ t:"answer", from:id, connId:o.connId, signal:s });
+    sendTG({
+      t:"answer",
+      from:id,
+      to:o.from,
+      connId:o.connId,
+      signal:s
+    });
   });
 
+  attachPeer(p,o.connId);
+  p.signal(o.signal);
+}
+
+function attachPeer(p,cid){
   p.on("connect", ()=>{
-    log("✅ connected " + o.connId);
+    log("✅ connected " + cid);
   });
 
   p.on("data", d=>{
     log("💬 " + d);
   });
 
-  p.signal(o.signal);
+  p.on("close", ()=>{
+    delete peers[cid];
+    helloSent = false;
+    maybeHello();
+  });
+
+  p.on("error", ()=>{
+    delete peers[cid];
+    helloSent = false;
+    maybeHello();
+  });
 }
 
 /* ===== POLLING ===== */
 async function poll(){
-  const r = await fetch(
-    `https://api.telegram.org/bot${BOT_READ}/getUpdates?offset=${lastUpdate+1}`
-  );
-  const j = await r.json();
-  if(!j.result) return;
+  try{
+    const r = await fetch(
+      `https://api.telegram.org/bot${BOT_READ}/getUpdates?offset=${lastUpdate+1}`
+    );
+    const j = await r.json();
+    if(!j.result) return;
 
-  j.result.forEach(u=>{
-    lastUpdate = u.update_id;
-    const m = u.channel_post || u.message;
-    if(!m?.text) return;
+    j.result.forEach(u=>{
+      lastUpdate = u.update_id;
+      const m = u.channel_post || u.message;
+      if(!m?.text) return;
 
-    try{
-      const o = JSON.parse(m.text);
-      if(o.from === id) return;
+      try{
+        const o = JSON.parse(m.text);
+        if(o.from === id) return;
 
-      /* HELLO = pancing OFFER */
-      if(o.t === "hello"){
-        if(peerCount() < MAX_PEERS){
-          makeOffer();
+        if(o.t === "hello"){
+          if(peerCount() < MAX_PEERS){
+            createOffer(o.from);
+          }
         }
-      }
 
-      /* OFFER */
-      if(o.t === "offer"){
-        if(!peers[o.connId] && peerCount() < MAX_PEERS){
-          answerOffer(o);
+        if(o.t === "offer" && o.to === id){
+          if(!peers[o.connId]){
+            answerOffer(o);
+          }
         }
-      }
 
-      /* ANSWER */
-      if(o.t === "answer"){
-        const p = peers[o.connId];
-        if(p) p.signal(o.signal);
-      }
-    }catch{}
-  });
+        if(o.t === "answer" && o.to === id){
+          const p = peers[o.connId];
+          if(p) p.signal(o.signal);
+        }
+      }catch{}
+    });
+  }catch{}
 }
 
 /* ===== CHAT ===== */
@@ -163,9 +207,8 @@ function sendMsg(){
 }
 
 /* ===== START ===== */
-sendHello();                       // user baru langsung announce
-setInterval(sendHello, 20000);     // user lama sesekali buka pintu
-setInterval(poll, POLL_INTERVAL);  // polling bodoh tapi stabil
+setTimeout(maybeHello, Math.random()*1500);
+setInterval(poll, POLL_INTERVAL);
 </script>
 
 </body>
